@@ -6,14 +6,13 @@ from collections import OrderedDict
 
 # Basic block used in the YOLO feature pyramid network (FPN).  This class serves as the template and is extended for the ConvBlock and ResidualBlocks.
 class Block(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size, activation = nn.LeakyReLU(0.1), **kwargs):
+    def __init__(self, in_channels, out_channels, **kwargs):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size
         
         self.block = nn.Identity()
-        self.activation = activation
+        self.activation = nn.LeakyReLU(0.1)
     
     def forward(self, x):
         x = self.block(x)
@@ -26,7 +25,7 @@ class Block(nn.Module):
 # ConvBlock used in the YOLO FPN.
 class ConvBlock(Block):
     def __init__(self, in_channels, out_channels, kernel_size, **kwargs):
-        super().__init__(in_channels, out_channels, kernel_size)
+        super().__init__(in_channels, out_channels)
         self.block = self._conv_bn(in_channels, out_channels, kernel_size, **kwargs)
 
 # ResidualBlock used in the YOLO FPN and consists of two convolutional layers in series.  The number of features maps is halved in the first
@@ -47,7 +46,7 @@ class ResidualBlock(Block):
 
 #FPN  in the YOLO model used for encoding the image information.
 class FeaturePyramidNetwork(nn.Module):
-    def __init__(self, in_channels, block = ResidualBlock, block_size = [64, 128, 256, 512, 1024], num_layers = [2, 4, 16, 16, 8]):
+    def __init__(self, in_channels, block_size = [64, 128, 256, 512, 1024], num_layers = [2, 4, 16, 16, 8]):
         super().__init__()
         self.stem = ConvBlock(in_channels, block_size[0] // 2, kernel_size = 3, padding = 1, bias = False)
 
@@ -82,12 +81,17 @@ class Detector(nn.Module):
     def forward(self, x):
         x = self.detector(x)
         return x
+        # return x.reshape(x.shape[0], 3, self.num_classes + 5, x.shape[2], x.shape[3]).permute(0, 1, 3, 4, 2)
+                
 
 #concatenate (in channel direction) with upstream residual layer immediately after upsampling
 class Upsample(nn.Module):
     def __init__(self, scale_factor = 2, **kwargs):
         super().__init__()
         self.upsample = nn.Upsample(scale_factor, **kwargs)
+
+    def forward(self, x):
+        return x
 
 class YOLO(nn.Module):
     def __init__(self, in_channels, num_classes, block_size = [64, 128, 256, 512, 1024], num_layers = [1, 2, 8, 8, 4]):
@@ -99,49 +103,71 @@ class YOLO(nn.Module):
             ConvBlock(block_size[-1] // 2, block_size[-1], kernel_size = 3, padding = 1, stride = 1, bias = False) )
 
         self.scale1 = nn.Sequential(
-            ResidualBlock(block_size[-1], stride = 1, bias = False),
+            ResidualBlock(block_size[-1], stride = 1),
             ConvBlock(block_size[-1], block_size[-1] // 2, kernel_size = 1, stride = 1) )
         
         self.upsampling1 = nn.Sequential(
             ConvBlock(block_size[-1] // 2, block_size[-1] // 4, kernel_size = 1, stride = 1),
-            Upsample(scale_factor=2),
-            ConvBlock(block_size[-1] // 2 + block_size[-1] // 4, block_size[-1] // 4, kernel_size = 1, stride = 1),
+            nn.Upsample(scale_factor = 2),
+            ConvBlock(block_size[-1] // 4, block_size[-1] // 4, kernel_size = 1, stride = 1),
             ConvBlock(block_size[-1] // 4, block_size[-1] // 2, kernel_size = 3, padding = 1, stride = 1)       
+            # ConvBlock(block_size[-1] // 2 + block_size[-1] // 4, block_size[-1] // 4, kernel_size = 1, stride = 1),
+            # ConvBlock(block_size[-1] // 4, block_size[-1] // 2, kernel_size = 3, padding = 1, stride = 1)       
         )
 
         self.scale2 = nn.Sequential(
-            ResidualBlock(block_size[-1] // 2, stride = 1, bias = False),
+            ResidualBlock(block_size[-1] // 2, stride = 1),
             ConvBlock(block_size[-1] // 2, block_size[-1] // 4, kernel_size = 1, stride = 1) )
 
         self.upsampling2 = nn.Sequential(
             ConvBlock(block_size[-1] // 4, block_size[-1] // 8, kernel_size = 1, stride = 1),
-            Upsample(scale_factor=2),
-            ConvBlock(block_size[-1] // 4 + block_size[-1] // 8, block_size[-1] // 8, kernel_size = 1, stride = 1),
+            nn.Upsample(scale_factor = 2),
+            ConvBlock(block_size[-1] // 8, block_size[-1] // 8, kernel_size = 1, stride = 1),
+            # ConvBlock(block_size[-1] // 4 + block_size[-1] // 8, block_size[-1] // 8, kernel_size = 1, stride = 1),
             ConvBlock(block_size[-1] // 8, block_size[-1] // 4, kernel_size = 3, padding = 1, stride = 1)       
         )
 
         self.scale3 = nn.Sequential(
-            ResidualBlock(block_size[-1] // 4, stride = 1, bias = False),
+            ResidualBlock(block_size[-1] // 4, stride = 1),
             ConvBlock(block_size[-1] // 4, block_size[-1] // 8, kernel_size = 1, stride = 1) )
 
         #follows from scale1
-        self.dectector1 = Detector(in_channels = block_size[-1] // 2, num_classes = num_classes, num_anchors = 3)
+        self.detector1 = Detector(in_channels = block_size[-1] // 2, num_classes = num_classes, num_anchors = 3)
         
         #follows from scale2
-        self.dectector2 = Detector(in_channels = block_size[-1] // 4, num_classes = num_classes, num_anchors = 3)
+        self.detector2 = Detector(in_channels = block_size[-1] // 4, num_classes = num_classes, num_anchors = 3)
 
         #follows from scale3
-        self.dectector3 = Detector(in_channels = block_size[-1] // 8, num_classes = num_classes, num_anchors = 3)
+        self.detector3 = Detector(in_channels = block_size[-1] // 8, num_classes = num_classes, num_anchors = 3)
 
 
-        self.detector = {'small': Detector(block_size[-1]),
-                         'mid': Detector(),
-                         'large': Detector()}
+        # self.detector = {'small': Detector(block_size[-1]),
+        #                  'mid': Detector(),
+        #                  'large': Detector()}
 
     def forward(self, x):
         x = self.fpn(x)
+
+        x = self.post(x)
+        x = self.scale1(x)
+        x = self.upsampling1(x)
+        x = self.scale2(x)
+        x = self.upsampling2(x)
+        x = self.scale3(x)
+        x = self.detector3(x)
         return x
 
+#%%
+    dummy = torch.rand(5, 3, 416, 416)
+    model = YOLO(in_channels = 3, num_classes = 20)
+    print(model)
+    print(model(dummy).shape)
+
+    # upsample = nn.Upsample(scale_factor=2)
+    # print(upsample(model(dummy)).shape)
+# torch.Size([2, 3, 13, 13, 25])
+# torch.Size([2, 3, 26, 26, 25])
+# torch.Size([2, 3, 52, 52, 25])
 
 #%%
 dummy = torch.rand(2, 3, 416, 416)
