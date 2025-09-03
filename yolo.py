@@ -44,26 +44,34 @@ class ResidualBlock(Block):
         x += identity
         return self.activation(x)
 
-#FPN  in the YOLO model used for encoding the image information.
-class FeaturePyramidNetwork(nn.Module):
-    def __init__(self, in_channels, block_size = [64, 128, 256, 512, 1024], num_layers = [2, 4, 16, 16, 8]):
+#Darknet53 in the YOLO model used for encoding the image information.
+class Darknet53(nn.Module):
+    def __init__(self, in_channels, block_size = [64, 128, 256, 512, 1024], num_layers = [1, 2, 8, 8, 4]):
         super().__init__()
+        self.num_layers = num_layers
+
         self.stem = ConvBlock(in_channels, block_size[0] // 2, kernel_size = 3, padding = 1, bias = False)
 
-        self.list = []
+        self.layers = []
+        self.layer_cache = []
         for i, num in enumerate(num_layers):
-            for j in range(num + 1):
-                # print(j)
+            for j in range(num + 1): #range is num + 1 b/c we include the first ConvBlock prior to the group of repeated ResidualBlocks
                 if j == 0:
-                    self.list.append(ConvBlock(block_size[i] // 2, block_size[i], kernel_size = 3, padding = 1, stride = 2))
+                    self.layers.append(ConvBlock(block_size[i] // 2, block_size[i], kernel_size = 3, padding = 1, stride = 2))
                 else:
-                    self.list.append(ResidualBlock(block_size[i], stride = 1))
+                    self.layers.append(ResidualBlock(block_size[i]))
 
-        self.layers = nn.Sequential(*self.list)
+        self.iter = iter(self.layers)
 
     def forward(self, x):
         x = self.stem(x)
-        x = self.layers(x)
+
+        self.iter = iter(self.layers)
+        for num in self.num_layers:
+            for i in range(num + 1):
+                x = next(self.iter)(x)
+                if i == num - 1:
+                    self.layer_cache.append(x)           
         return x
 
 class Detector(nn.Module):
@@ -74,94 +82,112 @@ class Detector(nn.Module):
         self.num_anchors = num_anchors
 
         self.detector = nn.Sequential(
-            ConvBlock(in_channels, 2*in_channels, kernel_size = 3, padding = 1, stride = 1),
+            ConvBlock(in_channels, 2*in_channels, kernel_size = 3, padding = 1),
             nn.Conv2d(2*in_channels, num_anchors * (num_classes + 5), kernel_size = 1) )
-            # ConvBlock(2*in_channels, num_anchors * (num_classes + 5), kernel_size = 1) )
 
     def forward(self, x):
         x = self.detector(x)
-        return x
-        # return x.reshape(x.shape[0], 3, self.num_classes + 5, x.shape[2], x.shape[3]).permute(0, 1, 3, 4, 2)
+        # return x
+        return x.reshape(x.shape[0], 3, self.num_classes + 5, x.shape[2], x.shape[3]).permute(0, 1, 3, 4, 2)
                 
 
 #concatenate (in channel direction) with upstream residual layer immediately after upsampling
 class Upsample(nn.Module):
-    def __init__(self, scale_factor = 2, **kwargs):
+    def __init__(self, in_channels, concat):
         super().__init__()
-        self.upsample = nn.Upsample(scale_factor, **kwargs)
+        self.block = nn.Sequential(
+            ConvBlock(in_channels, in_channels // 2, kernel_size = 1),
+            nn.Upsample(scale_factor = 2)
+            #there needs to be a concentation here
+            # ConvBlock(in_channels + in_channels // 2, in_channels // 2, kernel_size = 1),
+            # ConvBlock(in_channels // 2, in_channels // 2, kernel_size = 1),
+            # ConvBlock(in_channels // 2, in_channels, kernel_size = 3, padding = 1)
+        )
 
     def forward(self, x):
-        return x
+        return self.block(x)
+
+class Scale(nn.Module):
+    def __init__(self, in_channels):
+        super().__init__()
+        self.block = nn.Sequential(
+            ConvBlock(in_channels // 2, in_channels // 2, kernel_size = 1),
+            ConvBlock(in_channels // 2, in_channels, kernel_size = 3, padding = 1),
+            ResidualBlock(in_channels),
+            ConvBlock(in_channels, in_channels // 2, kernel_size = 1) )
+        
+    def forward(self, x):
+        return self.block(x)
 
 class YOLO(nn.Module):
     def __init__(self, in_channels, num_classes, block_size = [64, 128, 256, 512, 1024], num_layers = [1, 2, 8, 8, 4]):
         super().__init__()
-        self.fpn = FeaturePyramidNetwork(in_channels = in_channels, block_size = block_size, num_layers = num_layers)
+        self.darknet53 = Darknet53(in_channels = in_channels, block_size = block_size, num_layers = num_layers)
+        # darknet53 output shape: (1, 1024, 13, 13)
 
         self.post = nn.Sequential(
-            ConvBlock(block_size[-1], block_size[-1] // 2, kernel_size = 1, stride = 1, bias = False),
-            ConvBlock(block_size[-1] // 2, block_size[-1], kernel_size = 3, padding = 1, stride = 1, bias = False) )
+            ConvBlock(block_size[-1], block_size[-2], kernel_size = 1, bias = False),
+            ConvBlock(block_size[-2], block_size[-1], kernel_size = 3, padding = 1, bias = False) )
 
-        self.scale1 = nn.Sequential(
-            ResidualBlock(block_size[-1], stride = 1),
-            ConvBlock(block_size[-1], block_size[-1] // 2, kernel_size = 1, stride = 1) )
+        self.scale1 = Scale(block_size[-1])
+        #scale1 output filters is 512 (block_size[-1] // 2)
+
+        self.upsampling1 = Upsample(block_size[-2], concat = block_size[-2])
+        # self.upsampling1 = Upsample(block_size[-2], concat = self.darknet53.layer_cache[-2]) #cached value isnt available until we got through the foward pass
+        self.scale2 = Scale(block_size[-2])
+
+        self.upsampling2 = Upsample(block_size[-3], concat = self.darknet53.layer_cache[-3])
+        self.scale3 = Scale(block_size[-3])
+
+        #input from scale1
+        self.detector1 = Detector(in_channels = block_size[-2], num_classes = num_classes, num_anchors = 3)
         
-        self.upsampling1 = nn.Sequential(
-            ConvBlock(block_size[-1] // 2, block_size[-1] // 4, kernel_size = 1, stride = 1),
-            nn.Upsample(scale_factor = 2),
-            ConvBlock(block_size[-1] // 4, block_size[-1] // 4, kernel_size = 1, stride = 1),
-            ConvBlock(block_size[-1] // 4, block_size[-1] // 2, kernel_size = 3, padding = 1, stride = 1)       
-            # ConvBlock(block_size[-1] // 2 + block_size[-1] // 4, block_size[-1] // 4, kernel_size = 1, stride = 1),
-            # ConvBlock(block_size[-1] // 4, block_size[-1] // 2, kernel_size = 3, padding = 1, stride = 1)       
-        )
+        #input from scale2
+        self.detector2 = Detector(in_channels = block_size[-3], num_classes = num_classes, num_anchors = 3)
 
-        self.scale2 = nn.Sequential(
-            ResidualBlock(block_size[-1] // 2, stride = 1),
-            ConvBlock(block_size[-1] // 2, block_size[-1] // 4, kernel_size = 1, stride = 1) )
-
-        self.upsampling2 = nn.Sequential(
-            ConvBlock(block_size[-1] // 4, block_size[-1] // 8, kernel_size = 1, stride = 1),
-            nn.Upsample(scale_factor = 2),
-            ConvBlock(block_size[-1] // 8, block_size[-1] // 8, kernel_size = 1, stride = 1),
-            # ConvBlock(block_size[-1] // 4 + block_size[-1] // 8, block_size[-1] // 8, kernel_size = 1, stride = 1),
-            ConvBlock(block_size[-1] // 8, block_size[-1] // 4, kernel_size = 3, padding = 1, stride = 1)       
-        )
-
-        self.scale3 = nn.Sequential(
-            ResidualBlock(block_size[-1] // 4, stride = 1),
-            ConvBlock(block_size[-1] // 4, block_size[-1] // 8, kernel_size = 1, stride = 1) )
-
-        #follows from scale1
-        self.detector1 = Detector(in_channels = block_size[-1] // 2, num_classes = num_classes, num_anchors = 3)
-        
-        #follows from scale2
-        self.detector2 = Detector(in_channels = block_size[-1] // 4, num_classes = num_classes, num_anchors = 3)
-
-        #follows from scale3
-        self.detector3 = Detector(in_channels = block_size[-1] // 8, num_classes = num_classes, num_anchors = 3)
-
-
-        # self.detector = {'small': Detector(block_size[-1]),
-        #                  'mid': Detector(),
-        #                  'large': Detector()}
+        #input from scale3
+        self.detector3 = Detector(in_channels = block_size[-4], num_classes = num_classes, num_anchors = 3)
 
     def forward(self, x):
-        x = self.fpn(x)
+        xin = []
 
+        x = self.darknet53(x)
         x = self.post(x)
+        # post output shape: (1, 1024, 13, 13)
+
         x = self.scale1(x)
-        x = self.upsampling1(x)
-        x = self.scale2(x)
-        x = self.upsampling2(x)
-        x = self.scale3(x)
-        x = self.detector3(x)
+        xin.append(x)
+        # scale1 output shape: (1, 512, 13, 13)
+
+        # x = self.upsampling1(x)
+        # # # upsampling1 output shape: (1, 512, 26, 26)
+        # x = self.scale2(x)
+        # # # scale2 output shape: (1, 256, 26, 26)
+        # xin.append(x)
+
+        # x = self.upsampling2(x)
+        # # upsampling2 output shape: (1, 128, 52, 52)
+        # x = self.scale3(x)
+        # # # scale3 output shape: (1, 128, 52, 52)
+        # xin.append(x)
+
+        # output = []
+        # output.append(self.detector1(xin[0]))
+        # output.append(self.detector2(xin[1]))
+        # output.append(self.detector3(xin[2]))
+        # return output
         return x
 
 #%%
-    dummy = torch.rand(5, 3, 416, 416)
+    dummy = torch.rand(1, 3, 416, 416)
     model = YOLO(in_channels = 3, num_classes = 20)
-    print(model)
+    # print(model)
     print(model(dummy).shape)
+    # print(model(dummy))
+
+    # print(model(dummy)[0].shape)
+    # print(model(dummy)[1].shape)
+    # print(model(dummy)[2].shape)
 
     # upsample = nn.Upsample(scale_factor=2)
     # print(upsample(model(dummy)).shape)
@@ -169,21 +195,56 @@ class YOLO(nn.Module):
 # torch.Size([2, 3, 26, 26, 25])
 # torch.Size([2, 3, 52, 52, 25])
 
+    # print(f'model.darknet53.layer_cache[-2].shape = {model.darknet53.layer_cache[-2].shape}')
+    # print(f'model.darknet53.layer_cache[-3].shape = {model.darknet53.layer_cache[-3].shape}')
+    # print(model.darknet53.layer_cache[0].shape)
+    # print(model.darknet53.layer_cache[1].shape)
+    # print(model.darknet53.layer_cache[2].shape)
+    # print(model.darknet53.layer_cache[3].shape)
+    # print(model.darknet53.layer_cache[4].shape)
+
+#%%
+    dummy1 = torch.rand(1, 512, 26, 26)
+    dummy2 = torch.rand(1, 512, 26, 26)
+
+    print(torch.cat([dummy1, dummy2], dim = 1).shape)
+
+    dummy3 = torch.rand(1, 512, 52, 52)
+    dummy4 = torch.rand(1, 256, 52, 52)
+
+    print(torch.cat([dummy3, dummy4], dim = 1).shape)
+
+
+#%%
+    print(model.fpn.cache)
+
 #%%
 dummy = torch.rand(2, 3, 416, 416)
 print(dummy.shape)
 
 block = ResidualBlock(3, stride = 1)
-print(block(dummy).shape)
+print(block(dummy)[0])
+print(block(dummy)[1])
+print(block(dummy)[2])
+
+# print(lengh)
+
+# print(block(dummy))
 
 #%%
 dummy = torch.rand(1, 3, 416, 416)
 print(dummy.shape)
 
-block = FeaturePyramidNetwork(in_channels = 3, block_size = [64, 128, 256, 512, 1024], num_layers = [1, 2, 8, 8, 4])
+block = Darknet53(in_channels = 3, block_size = [64, 128, 256, 512, 1024], num_layers = [1, 2, 8, 8, 4])
 print(block)
 # print(block(dummy))
 print(block(dummy).shape)
+print(len(block.layer_cache))
+print(block.layer_cache[0].shape)
+print(block.layer_cache[1].shape)
+print(block.layer_cache[2].shape)
+print(block.layer_cache[3].shape)
+print(block.layer_cache[4].shape)
 
 #%%
 dummy = torch.rand(1, 3, 416, 416)
