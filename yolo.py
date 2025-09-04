@@ -92,29 +92,28 @@ class Detector(nn.Module):
                 
 
 #concatenate (in channel direction) with upstream residual layer immediately after upsampling
-class Upsample(nn.Module):
-    def __init__(self, in_channels, concat):
-        super().__init__()
-        self.block = nn.Sequential(
-            ConvBlock(in_channels, in_channels // 2, kernel_size = 1),
-            nn.Upsample(scale_factor = 2)
-            #there needs to be a concentation here
-            # ConvBlock(in_channels + in_channels // 2, in_channels // 2, kernel_size = 1),
-            # ConvBlock(in_channels // 2, in_channels // 2, kernel_size = 1),
-            # ConvBlock(in_channels // 2, in_channels, kernel_size = 3, padding = 1)
-        )
-
-    def forward(self, x):
-        return self.block(x)
-
-class Scale(nn.Module):
+class Upsample(nn.Module):  #out_channels = in_channels + in_channels // 2
     def __init__(self, in_channels):
         super().__init__()
+        self.conv = ConvBlock(in_channels, in_channels // 2, kernel_size = 1)
+        self.upsample = nn.Upsample(scale_factor = 2)
+
+    def forward(self, x, cat_block = None):
+        x = self.conv(x)
+        x = self.upsample(x)
+
+        if cat_block is not None:
+            x = torch.cat([x, cat_block], dim = 1)
+        return x
+
+class Scale(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
         self.block = nn.Sequential(
-            ConvBlock(in_channels // 2, in_channels // 2, kernel_size = 1),
-            ConvBlock(in_channels // 2, in_channels, kernel_size = 3, padding = 1),
-            ResidualBlock(in_channels),
-            ConvBlock(in_channels, in_channels // 2, kernel_size = 1) )
+            ConvBlock(in_channels, out_channels, kernel_size = 1),
+            ConvBlock(out_channels, 2*out_channels, kernel_size = 3, padding = 1),
+            ResidualBlock(2*out_channels),
+            ConvBlock(2*out_channels, out_channels, kernel_size = 1) )
         
     def forward(self, x):
         return self.block(x)
@@ -125,69 +124,54 @@ class YOLO(nn.Module):
         self.darknet53 = Darknet53(in_channels = in_channels, block_size = block_size, num_layers = num_layers)
         # darknet53 output shape: (1, 1024, 13, 13)
 
-        self.post = nn.Sequential(
-            ConvBlock(block_size[-1], block_size[-2], kernel_size = 1, bias = False),
-            ConvBlock(block_size[-2], block_size[-1], kernel_size = 3, padding = 1, bias = False) )
+        self.scale1 = Scale(block_size[-1], block_size[-2])
 
-        self.scale1 = Scale(block_size[-1])
-        #scale1 output filters is 512 (block_size[-1] // 2)
+        self.upsampling1 = Upsample(block_size[-2]) #out_channels = in_channels + in_channels // 2
+        self.scale2 = Scale(3 * block_size[-3], block_size[-3])
 
-        self.upsampling1 = Upsample(block_size[-2], concat = block_size[-2])
-        # self.upsampling1 = Upsample(block_size[-2], concat = self.darknet53.layer_cache[-2]) #cached value isnt available until we got through the foward pass
-        self.scale2 = Scale(block_size[-2])
-
-        self.upsampling2 = Upsample(block_size[-3], concat = self.darknet53.layer_cache[-3])
-        self.scale3 = Scale(block_size[-3])
-
-        #input from scale1
-        self.detector1 = Detector(in_channels = block_size[-2], num_classes = num_classes, num_anchors = 3)
+        self.upsampling2 = Upsample(block_size[-3])
+        self.scale3 = Scale(3 * block_size[-4], block_size[-4])
         
-        #input from scale2
-        self.detector2 = Detector(in_channels = block_size[-3], num_classes = num_classes, num_anchors = 3)
-
-        #input from scale3
-        self.detector3 = Detector(in_channels = block_size[-4], num_classes = num_classes, num_anchors = 3)
+        self.detector = [Detector(in_channels = block_size[-2], num_classes = num_classes, num_anchors = 3), #input from scale1
+                          Detector(in_channels = block_size[-3], num_classes = num_classes, num_anchors = 3), #input from scale2
+                          Detector(in_channels = block_size[-4], num_classes = num_classes, num_anchors = 3)] #input from scale3
 
     def forward(self, x):
         xin = []
-
         x = self.darknet53(x)
-        x = self.post(x)
-        # post output shape: (1, 1024, 13, 13)
 
-        x = self.scale1(x)
-        xin.append(x)
+        x = self.scale1(x) #in_channels = 1024, out_channels = 512
         # scale1 output shape: (1, 512, 13, 13)
+        xin.append(x)
 
-        # x = self.upsampling1(x)
-        # # # upsampling1 output shape: (1, 512, 26, 26)
-        # x = self.scale2(x)
-        # # # scale2 output shape: (1, 256, 26, 26)
-        # xin.append(x)
+        x = self.upsampling1(x, cat_block = self.darknet53.layer_cache[-2]) #in_channels = 512, out_channels = 768
+        # upsampling1 output shape: (1, 768, 26, 26)
+        x = self.scale2(x)
+        # scale2 output shape: (1, 256, 26, 26)
+        xin.append(x)
 
-        # x = self.upsampling2(x)
-        # # upsampling2 output shape: (1, 128, 52, 52)
-        # x = self.scale3(x)
+        x = self.upsampling2(x, cat_block = self.darknet53.layer_cache[-3])
+        # # upsampling2 output shape: (1, 384, 52, 52)
+        x = self.scale3(x)
         # # # scale3 output shape: (1, 128, 52, 52)
-        # xin.append(x)
+        xin.append(x)
 
-        # output = []
-        # output.append(self.detector1(xin[0]))
-        # output.append(self.detector2(xin[1]))
-        # output.append(self.detector3(xin[2]))
-        # return output
-        return x
+        output = []
+        for i, input in enumerate(xin):
+            output.append(self.detector[i](input))
+
+        return output
 
 #%%
     dummy = torch.rand(1, 3, 416, 416)
     model = YOLO(in_channels = 3, num_classes = 20)
     # print(model)
-    print(model(dummy).shape)
+    # print(model(dummy).shape)
     # print(model(dummy))
 
-    # print(model(dummy)[0].shape)
-    # print(model(dummy)[1].shape)
-    # print(model(dummy)[2].shape)
+    print(model(dummy)[0].shape)
+    print(model(dummy)[1].shape)
+    print(model(dummy)[2].shape)
 
     # upsample = nn.Upsample(scale_factor=2)
     # print(upsample(model(dummy)).shape)
@@ -216,22 +200,6 @@ class YOLO(nn.Module):
 
 
 #%%
-    print(model.fpn.cache)
-
-#%%
-dummy = torch.rand(2, 3, 416, 416)
-print(dummy.shape)
-
-block = ResidualBlock(3, stride = 1)
-print(block(dummy)[0])
-print(block(dummy)[1])
-print(block(dummy)[2])
-
-# print(lengh)
-
-# print(block(dummy))
-
-#%%
 dummy = torch.rand(1, 3, 416, 416)
 print(dummy.shape)
 
@@ -255,10 +223,10 @@ dummy2 = dummy.reshape(1,416,3,416)
 print(dummy2.shape)
 
 #%%
-x = torch.ones(1, 3, 3)
+x = torch.ones(1, 3, 512, 512)
 # y = 5 * torch.ones(3, 3)
-upsample = nn.Upsample(scale_factor=2, dim = 0)
-print(upsample(x))
+upsample = nn.Upsample(scale_factor=2)
+print(upsample(x).shape)
 
 # print(x)
 # print(y)
