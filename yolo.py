@@ -162,7 +162,8 @@ class YOLO(nn.Module):
 
         return output
 
-#%%
+if __name__ == '__main__':
+    #%%
     dummy = torch.rand(1, 3, 416, 416)
     model = YOLO(in_channels = 3, num_classes = 20)
     # print(model)
@@ -197,42 +198,40 @@ class YOLO(nn.Module):
     dummy4 = torch.rand(1, 256, 52, 52)
 
     print(torch.cat([dummy3, dummy4], dim = 1).shape)
+    import matplotlib.pyplot as plt
 
 
-#%%
-dummy = torch.rand(1, 3, 416, 416)
-print(dummy.shape)
+    #%%
+    dummy = torch.rand(1, 3, 416, 416)
+    print(dummy.shape)
 
-block = Darknet53(in_channels = 3, block_size = [64, 128, 256, 512, 1024], num_layers = [1, 2, 8, 8, 4])
-print(block)
-# print(block(dummy))
-print(block(dummy).shape)
-print(len(block.layer_cache))
-print(block.layer_cache[0].shape)
-print(block.layer_cache[1].shape)
-print(block.layer_cache[2].shape)
-print(block.layer_cache[3].shape)
-print(block.layer_cache[4].shape)
+    block = Darknet53(in_channels = 3, block_size = [64, 128, 256, 512, 1024], num_layers = [1, 2, 8, 8, 4])
+    print(block)
+    # print(block(dummy))
+    print(block(dummy).shape)
+    print(len(block.layer_cache))
+    print(block.layer_cache[0].shape)
+    print(block.layer_cache[1].shape)
+    print(block.layer_cache[2].shape)
+    print(block.layer_cache[3].shape)
+    print(block.layer_cache[4].shape)
 
-#%%
-dummy = torch.rand(1, 3, 416, 416)
-print(dummy.shape)
-dummy.reshape(3,416,416,1)
-dummy.reshape(3,416,1,416)
-dummy2 = dummy.reshape(1,416,3,416)
-print(dummy2.shape)
+    #%%
+    dummy = torch.rand(1, 3, 416, 416)
+    print(dummy.shape)
+    dummy.reshape(3,416,416,1)
+    dummy.reshape(3,416,1,416)
+    dummy2 = dummy.reshape(1,416,3,416)
+    print(dummy2.shape)
 
-#%%
-x = torch.ones(1, 3, 512, 512)
-# y = 5 * torch.ones(3, 3)
-upsample = nn.Upsample(scale_factor=2)
-print(upsample(x).shape)
+    #%%
+    x = torch.ones(1, 3, 512, 512)
+    # y = 5 * torch.ones(3, 3)
+    upsample = nn.Upsample(scale_factor=2)
+    print(upsample(x).shape)
 
-# print(x)
-# print(y)
-# print(torch.cat([x,y], dim = 0))
-# print(torch.cat([x,y], dim = 1))
-
-if __name__ == '__main__':
-    pass
+    # print(x)
+    # print(y)
+    # print(torch.cat([x,y], dim = 0))
+    # print(torch.cat([x,y], dim = 1))
 # %%

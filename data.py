@@ -34,10 +34,7 @@ class data_COCO():
         self.cats = self.coco.loadCats(self.coco.getCatIds())
         self.catIds = self.coco.getCatIds(self.cats)
         self.imgIds = self.coco.getImgIds(catIds = self.catIds)
-   
-        self.labels = {}
-        for cat in self.cats:
-            self.labels[cat['id']] = cat['name']
+        self.labels = {cat['id'] : cat['name'] for cat in self.cats}
 
         self.anchors = anchors
         self.num_anchors_per_scale = num_anchors_per_scale
@@ -79,11 +76,6 @@ class data_COCO():
         anns = self.coco.loadAnns(annIds)
 
         output = [torch.zeros((self.num_anchors_per_scale, S, S, 6)) for S in self.scale_size]
-
-        # labels = torch.tensor([ann['category_id'] for ann in anns], dtype = torch.long)
-        # bbox = torch.tensor([ann['bbox'] for ann in anns], dtype = torch.float32)
-        # bbox[:, [0,2]] /= img['width']
-        # bbox[:, [1,3]] /= img['height']
         labels, bbox = self.coco_to_yolo(anns, img)
 
         ious = self.compute_iou_wh(bbox[:,2:4], self.anchors)
@@ -110,9 +102,7 @@ class data_COCO():
                         bbox[bbox_idx, 2] * self.scale_size[scale_idx],
                         bbox[bbox_idx, 3] * self.scale_size[scale_idx],
                     )  # can be greater than 1 since it's relative to cell
-                    abox = torch.tensor(
-                        [x_cell, y_cell, width_cell, height_cell]
-                    )
+                    abox = torch.tensor([x_cell, y_cell, width_cell, height_cell])
 
                     output[scale_idx][anchor_idx, int(i), int(j), 0] = 1
                     output[scale_idx][anchor_idx, int(i), int(j), 1:5] = abox
@@ -122,14 +112,8 @@ class data_COCO():
                 elif anchor_set == True and iou[scale_idx][anchor_idx] > self.iou_thresh:
                     output[scale_idx][anchor_idx, int(i), int(j), 0] = -1
  
-                #the model output and ground truth labels need to be consistent to evaluate the loss function
-                # torch.Size([2, 3, 13, 13, 25])
-                # torch.Size([2, 3, 26, 26, 25])
-                # torch.Size([2, 3, 52, 52, 25])
-                # imgs, labels = data[0].to(self.device), data[1].to(self.device)
-
         #image needs to be of type float32 and label needs to be torch long (the label is an index, not name)
-        return I, output
+        return I, tuple(output)
         # return I, torch.tensor(output, dtype=torch.long)
     
     # calculate iou between abox and bbox where iou is defined as: area of overlap / area of union
@@ -175,66 +159,79 @@ class data_COCO():
         # print(area_intersect.size(), area_bbox.size(), area_anchor.size())
         return area_intersect/(area_bbox + area_anchor - area_intersect)
 
-
-#%%  
-data = data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES)
-print(data.__len__())
-#%%
-img, output = data.__getitem__(16)
-img, output = data.__getitem__(22)
-# plt.imshow(img)
-
-# Create figure and axes
-fig, ax = plt.subplots()
-ax.imshow(img)
-
-print(output[0].size())
-print(output[0].size()[1])
-print(output[0].size()[2])
-print(output[1].size())
-print(output[2].size())
-
-#bounding boxes are defined as x_topleft, y_topleft, w, h - where x, y are the top left corner of the image (for the coco format)
-#YOLO format, x_center, y_center, w, h
-def convert_ij_to_xy(bbox, i, j, width, height, scale_size = 13):
-    x = (bbox[0] + i) * width / scale_size
-    y = (bbox[1] + j) * height / scale_size
-    w = bbox[2] * width / scale_size
-    h = bbox[3] * height / scale_size
-
-    return torch.tensor([x, y, w, h], dtype=torch.float32)
-
-def plot_boxes(coord, fig_name):
-    x = coord[0] - 0.5*coord[2]
-    y = coord[1] - 0.5*coord[3]
-
-    rect = patches.Rectangle(xy = (x, y), width = coord[2], height = coord[3], linewidth=1, linestyle = '--', edgecolor='r', facecolor='none')
-    fig_name.add_patch(rect)
-
-# print(output[0][0])
-def check_outputs(output):
-    print(f'size = {output.size()}')
-
-    for i in range(output.size()[1]):
-        for j in range(output.size()[2]):
-            for k in range(output.size()[0]):
-                if output[k,i,j,0] == 1:
-                    # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 640, 480)
-                    # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 399, 640)
-                    bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 640, 427)
-                    print(f'i={i}, j={j}, anchor_idx={k}, label={int(output[k,i,j,5])}, bbox={output[k,i,j,1:5]}, bbox0={bbox0}')
-
-                    plot_boxes(bbox0, ax)
-
-
-check_outputs(output[0])
-plt.show()
-
 #%%
 
 #%%
-if __name__ == 'main':
-    data = data_COCO(datadir = './coco/', datatype = 'val2017')
-    print(coco.__len__())
-    print('test')
+if __name__ == "__main__":
+    data = data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES)
+    print(data.__len__())
+    #%%
+    img, output = data.__getitem__(16)
+    img, output = data.__getitem__(22)
+    # plt.imshow(img)
+
+    # Create figure and axes
+    fig, ax = plt.subplots()
+    ax.imshow(img)
+
+    print(output[0].size())
+    print(output[0].size()[1])
+    print(output[0].size()[2])
+    print(output[1].size())
+    print(output[2].size())
+
+    #bounding boxes are defined as x_topleft, y_topleft, w, h - where x, y are the top left corner of the image (for the coco format)
+    #YOLO format, x_center, y_center, w, h
+    def convert_ij_to_xy(bbox, i, j, width, height, scale_size = 13):
+        x = (bbox[0] + i) * width / scale_size
+        y = (bbox[1] + j) * height / scale_size
+        w = bbox[2] * width / scale_size
+        h = bbox[3] * height / scale_size
+
+        return torch.tensor([x, y, w, h], dtype=torch.float32)
+
+    def plot_boxes(coord, fig_name):
+        x = coord[0] - 0.5*coord[2]
+        y = coord[1] - 0.5*coord[3]
+
+        rect = patches.Rectangle(xy = (x, y), width = coord[2], height = coord[3], linewidth=1, linestyle = '--', edgecolor='r', facecolor='none')
+        fig_name.add_patch(rect)
+
+    # print(output[0][0])
+    def check_outputs(output):
+        print(f'size = {output.size()}')
+
+        count = 0 
+        for i in range(output.size()[1]):
+            for j in range(output.size()[2]):
+                for k in range(output.size()[0]):
+                    if output[k,i,j,0] == 1:
+                        # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 640, 480)
+                        # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 399, 640)
+                        bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 640, 427)
+                        print(f'i={i}, j={j}, anchor_idx={k}, label={data.labels[int(output[k,i,j,5])]}, bbox={output[k,i,j,1:5]}, bbox0={bbox0}')
+
+                        plot_boxes(bbox0, ax)
+                        count += 1
+
+        print(f'count = {count}')
+
+    check_outputs(output[0])
+    plt.show()
+
+    #%%
+    # obj = output[...,0] == 1
+    obj = output[0][...,0] == 1
+    noobj = output[0][...,0] == 0
+    # print(obj)
+
+    print(obj.size())
+    print(output[0].size())
+    print(output[0][...,0].size())
+    print(output[0][...,0:1].size()) # we specify 0:1 instead of 0 in order to preserve the extra dimension (for broadcasting)
+    print(output[0][...,0:1][obj].size())
+    print(output[0][...,0:1][noobj].size())
+
+    # print(output[0][...,0:1][obj])
+    # print(output[0][...,0:1])
 # %%
