@@ -130,10 +130,14 @@ class data_COCO():
         else:
             h = torch.min(bbox1[...,1], bbox2[...,1])
 
-        aint = w*h
-        a1 = bbox1[...,2]*bbox1[...,3]
-        a2 = bbox2[...,2]*bbox2[...,3]
-        return aint/(a1 + a2 - aint)
+        # w = (bbox1[..., 2]/2 + bbox2[..., 2]/2 - torch.abs(bbox1[..., 0] - bbox2[..., 0])).clamp(min=0)
+        # h = (bbox1[..., 3]/2 + bbox2[..., 3]/2 - torch.abs(bbox1[..., 1] - bbox2[..., 1])).clamp(min=0)
+
+        area_intersect = w*h
+        area_bbox = bbox1[..., 0]*bbox1[..., 1]
+        area_anchor = bbox2[..., 0]*bbox2[..., 1]
+        # print(area_intersect.size(), area_bbox.size(), area_anchor.size())
+        return area_intersect/(area_bbox + area_anchor - area_intersect)
 
     @staticmethod
     def compute_iou_wh(bbox1, bbox2):
@@ -234,4 +238,12 @@ if __name__ == "__main__":
 
     # print(output[0][...,0:1][obj])
     # print(output[0][...,0:1])
+
+    #%%
+    print(ANCHOR_BOXES.size())
+    scale0 = ANCHOR_BOXES[0]
+    print(scale0.size())
+
+
+
 # %%
