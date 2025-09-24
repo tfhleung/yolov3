@@ -165,7 +165,7 @@ class data_COCO():
 
 #%%
 
-#%%
+#%% test
 if __name__ == "__main__":
     data = data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES)
     print(data.__len__())
