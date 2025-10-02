@@ -89,6 +89,12 @@ class data_COCO():
 
         top, bottom = (target_size[1]-int(scale*h))//2, target_size[1] - (target_size[1]-int(scale*h))//2 - int(scale*h)
         left, right = (target_size[0]-int(scale*w))//2, target_size[0] - (target_size[0]-int(scale*w))//2 - int(scale*w)
+        # top, bottom = (target_size[1]-int(scale*h))//2, target_size[1] - (target_size[1]-int(scale*h))//2 - h
+        # left, right = (target_size[0]-int(scale*w))//2, target_size[0] - (target_size[0]-int(scale*w))//2 - w
+        # print(f'int(scale*h)={int(scale*h)}, h={h}')
+        # print(f'int(scale*w)={int(scale*w)}, w={w}')
+        # print(f'c={img.shape[2]}, h={h}, w={w}')
+
 
         img_resized = cv2.resize(img, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_LINEAR)
         img_resized = cv2.copyMakeBorder(img_resized, top, bottom, left, right, cv2.BORDER_CONSTANT, None, value = 0)
@@ -101,13 +107,26 @@ class data_COCO():
         # print(f'padding = {padding}')
         bbox = bbox.clone()
         bbox *= scale
+
+        #DOUBLE-CHECK THE PADDING IS DONE CORRECTLY!! FOR NOW IT IS CLAMPED!!!
         bbox[:, 0] += padding[0]/img['width']
         bbox[:, 1] += padding[1]/img['height']
+        bbox[:, 0:4] = torch.clamp(bbox[:, 0:4], max=(1.0-1.e-6))
         # print(f'padding[1]={padding[1]}, img[height]={img['height']}, padding[1]//img[height]={padding[1]//img['height']}')
         return bbox
 
+    def convert_to_RGB(self, I):
+        from skimage import color
+        if I.ndim == 2:  # grayscale
+            return color.gray2rgb(I)  # expand to (H, W, 3)
+        elif I.shape[2] == 4:  # RGBA
+            return I[..., :3]
+        else:
+            return I
+
     def __getitem__(self, idx, img_resize = True):
-        # print(f'idx = {idx}')
+        #need to map idx so that it is continous from 0 to 5000
+        print(f'idx = {idx}')
         img = self.coco.loadImgs(self.imgIds[idx])[0]
         annIds = self.coco.getAnnIds(imgIds=img['id'])
         anns = self.coco.loadAnns(annIds)
@@ -115,9 +134,9 @@ class data_COCO():
         output = [torch.zeros((self.num_anchors_per_scale, S, S, 6)) for S in self.scale_size]
 
         if img_resize == True:
-            I, scale, padding = self.letterbox(io.imread(f'{self.datadir}/images/{self.datatype}/{img['file_name']}'), self.target_size)
+            I, scale, padding = self.letterbox(self.convert_to_RGB(io.imread(f'{self.datadir}/images/{self.datatype}/{img['file_name']}')), self.target_size)
         else:
-            I, scale, padding = torch.tensor(io.imread(f'{self.datadir}/images/{self.datatype}/{img['file_name']}')), 1., (0, 0)
+            I, scale, padding = torch.tensor(self.convert_to_RGB(io.imread(f'{self.datadir}/images/{self.datatype}/{img['file_name']}'))), 1., (0, 0)
 
         labels, bbox_normalized = self.coco_to_yolo(anns, img)
         if labels is None:
@@ -141,7 +160,7 @@ class data_COCO():
                     anchor_set = False
 
                 i, j = self.scale_size[scale_idx] * bbox_normalized[bbox_idx, 0], self.scale_size[scale_idx] * bbox_normalized[bbox_idx, 1]  # which cell
-                # print(f'idx={idx}, i={i}, j={j}')
+                # print(f'idx={idx}, i={i}, j={j}, scale_size[scale_idx]={self.scale_size[scale_idx]}, xbox={bbox_normalized[bbox_idx, 0]}, ybox={bbox_normalized[bbox_idx, 1]}')
 
                 if output[scale_idx][anchor_idx, int(i), int(j), 0] != 1 and anchor_set == False:
                     x_cell, y_cell = i - int(i), j - int(j)  # return fraction parts of i and j
@@ -216,7 +235,7 @@ class data_COCO():
         return area_intersect/(area_bbox + area_anchor - area_intersect)
 
 #%%
-
+    print(int(1.-1e-16))
 #%% test
 if __name__ == "__main__":
     data = data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES)
@@ -275,6 +294,7 @@ if __name__ == "__main__":
     # img, output = data.__getitem__(1680)
     # img, output = data.__getitem__(160)
     # img, output = data.__getitem__(54) #height = 427, width = 640
+    img, output = data.__getitem__(999) #height = 429, width = 500
     # plt.imshow(img)
 
     # print(f'img.size() = {img.size()}')
@@ -319,7 +339,8 @@ if __name__ == "__main__":
                     if output[k,i,j,0] == 1:
                         # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 640, 480)
                         # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 399, 640)
-                        bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 640, 427)
+                        bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 500, 429)
+                        # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 640, 427)
                         print(f'i={i}, j={j}, anchor_idx={k}, bbox={output[k,i,j,1:5]}, bbox0={bbox0}')
                         # print(f'i={i}, j={j}, anchor_idx={k}, label={data.labels[int(output[k,i,j,5])]}, bbox={output[k,i,j,1:5]}, bbox0={bbox0}')
 
