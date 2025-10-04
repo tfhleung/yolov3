@@ -28,7 +28,8 @@ class YOLO_LOSSV3(nn.Module):
         self.bce = nn.BCEWithLogitsLoss(reduction='sum')
         self.ce = nn.CrossEntropyLoss(reduction="sum")
 
-    def forward(self, preds, target): # B, C, S, S, O
+    # train_labels S, B, A, I, J, O where S is the scale index, B is batch_size, A is anchor index, I is anchor index, J is anchor index and O is the label output
+    def forward(self, preds, target): # B, C, S, S, O where B is batch size, C is the number of channels, S is the anchor box index and O is the output
         anchors = [scale.reshape(3,1,1,2) for scale in self.anchor_boxes]
         total_loss, box_loss, obj_loss, cls_loss = [torch.zeros(3) for _ in range(4)]
 
@@ -43,9 +44,9 @@ class YOLO_LOSSV3(nn.Module):
             box_loss[i] = self.mse(preds[i][..., 1:5][obj], target[i][..., 1:5][obj])
 
             #object loss
-            box_preds = torch.cat([self.sigmoid(preds[i][..., 1:3]), torch.exp(preds[i][..., 3:5]) * anchors[i]], dim=-1) #convert preds to ground-truth format (offsets)
-            ious = self.iou(box_preds[obj], target[i][..., 1:5][obj]).detach()
-            obj_loss[i] = self.bce(self.sigmoid(preds[i][..., 0][obj]), ious*target[i][..., 0][obj])
+            # box_preds = torch.cat([self.sigmoid(preds[i][..., 1:3]), torch.exp(preds[i][..., 3:5]) * anchors[i]], dim=-1) #convert preds to ground-truth format (offsets)
+            # ious = self.iou(box_preds[obj], target[i][..., 1:5][obj]).detach()
+            # obj_loss[i] = self.bce(self.sigmoid(preds[i][..., 0][obj]), ious*target[i][..., 0][obj])
 
             #class loss
             cls_loss[i] = self.ce(preds[i][..., 5:][obj], target[i][..., 5][obj].long())
