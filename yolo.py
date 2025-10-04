@@ -52,8 +52,16 @@ class Darknet53(nn.Module):
 
         self.stem = ConvBlock(in_channels, block_size[0] // 2, kernel_size = 3, padding = 1, bias = False)
 
-        self.layers = []
+        # self.layers = []
         self.layer_cache = []
+        # for i, num in enumerate(num_layers):
+        #     for j in range(num + 1): #range is num + 1 b/c we include the first ConvBlock prior to the group of repeated ResidualBlocks
+        #         if j == 0:
+        #             self.layers.append(ConvBlock(block_size[i] // 2, block_size[i], kernel_size = 3, padding = 1, stride = 2))
+        #         else:
+        #             self.layers.append(ResidualBlock(block_size[i]))
+
+        self.layers = nn.ModuleList()
         for i, num in enumerate(num_layers):
             for j in range(num + 1): #range is num + 1 b/c we include the first ConvBlock prior to the group of repeated ResidualBlocks
                 if j == 0:
@@ -61,15 +69,18 @@ class Darknet53(nn.Module):
                 else:
                     self.layers.append(ResidualBlock(block_size[i]))
 
-        self.iter = iter(self.layers)
+        # self.iter = iter(self.layers)
 
     def forward(self, x):
         x = self.stem(x)
 
-        self.iter = iter(self.layers)
+        # self.iter = iter(self.layers)
+        iterator = iter(self.layers)
         for num in self.num_layers:
             for i in range(num + 1):
-                x = next(self.iter)(x)
+                x = next(iterator)(x)
+
+                # x = next(iter(self.layers))(x)
                 if i == num - 1:
                     self.layer_cache.append(x)           
         return x
@@ -132,9 +143,12 @@ class YOLO(nn.Module):
         self.upsampling2 = Upsample(block_size[-3])
         self.scale3 = Scale(3 * block_size[-4], block_size[-4])
         
-        self.detector = [Detector(in_channels = block_size[-2], num_classes = num_classes, num_anchors = 3), #input from scale1
+        self.detector = nn.ModuleList([Detector(in_channels = block_size[-2], num_classes = num_classes, num_anchors = 3), #input from scale1
                           Detector(in_channels = block_size[-3], num_classes = num_classes, num_anchors = 3), #input from scale2
-                          Detector(in_channels = block_size[-4], num_classes = num_classes, num_anchors = 3)] #input from scale3
+                          Detector(in_channels = block_size[-4], num_classes = num_classes, num_anchors = 3)]) #input from scale3
+        
+        # self.output = nn.ModuleList([self.detector[0], self.detector[1], self.detector[2]])
+        # self.output = []
 
     def forward(self, x):
         xin = []
@@ -156,19 +170,31 @@ class YOLO(nn.Module):
         # # # scale3 output shape: (1, 128, 52, 52)
         xin.append(x)
 
+        self.darknet53.layer_cache = []
         output = []
         for i, input in enumerate(xin):
             output.append(self.detector[i](input))
 
         return output
-
+#%%
 if __name__ == '__main__':
-    #%%
     dummy = torch.rand(1, 3, 416, 416)
+    model = Darknet53(3)
+    print(model)
+
+
+
+
+#%%
+    dummy = torch.rand(1, 3, 416, 416)
+    # model = YOLO(in_channels = 3, num_classes = 20)
     model = YOLO(in_channels = 3, num_classes = 20)
-    # print(model)
+    print(model)
     # print(model(dummy).shape)
     # print(model(dummy))
+
+    # output = model(dummy)
+    # print(output)
 
     print(model(dummy)[0].shape)
     print(model(dummy)[1].shape)
