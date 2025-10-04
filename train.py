@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 
 from data import data_COCO
 from yolo import YOLO
-from loss_func import YOLO_LOSS
+from loss_func import YOLO_LOSSV3
 
 
 #%%
@@ -18,6 +18,7 @@ class Trainer():
         self.dataset = dataset
         self.device = device
         self.model = model.to(device)
+        print(f'model is on {next(model.parameters()).device}')
 
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -30,14 +31,25 @@ class Trainer():
         self.momentum = momentum
         self.epochs = epochs
 
-        self.loss_func = loss_func
+        self.loss_func = loss_func.to(device)
         self.optimizer = torch.optim.SGD(self.model.parameters(), self.lr, self.momentum)
 
         self.accuracy = {'train': [], 'val': [], 'test': []}
 
+        torch.cuda.reset_peak_memory_stats(self.device)
         total_params = sum(p.numel() for p in self.model.parameters())
         total_trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         print(f"Number of parameters = {total_params}, Number of Trainable Parameters = {total_trainable_params}")
+        print(f'Memory allocated={torch.cuda.memory_allocated()/ (1024**2):.2f} MB')
+        if torch.cuda.is_available():
+            max_allocated_memory = torch.cuda.max_memory_allocated()
+            print(f"Peak allocated GPU memory: {max_allocated_memory / (1024**2):.2f} MB")
+        else:
+            print("CUDA is not available.")
+
+        for name, param in self.model.named_parameters():
+            print(f"{name}, device = {param.device}")
+            
 
     def train(self):
         running_loss = 0.0
@@ -47,23 +59,39 @@ class Trainer():
         for epoch in range(self.epochs):
             total_loss = 0.0
             for i, data in enumerate(tqdm(self.dataloader['train'])):
-                imgs, output = data[0].to(self.device), data[1].to(self.device)
+                imgs, train_labels = data[0].to(self.device), [d.to(self.device) for d in data[1]]
 
                 self.optimizer.zero_grad()
                 self.model.train(True)
+                preds = self.model(imgs.view(imgs.size(0),3,416,416).float())
 
-                preds = self.model(imgs)
-                loss = self.loss_func(preds[0], output[0]) + self.loss_func(preds[1], output[1]) + self.loss_func(preds[2], output[2])
-                loss.backward()
+                # preds = [p.to(self.device) for p in preds]
+                # train_labels = [t.to(self.device) for t in train_labels]
+
+                loss, box_loss, obj_loss, cls_loss = self.loss_func(preds, train_labels)
+                loss0 = loss[0] + loss[1] + loss[2]
+                # print(f'i={i}, loss={loss}, box_loss={box_loss}, obj_loss={obj_loss}, cls_loss={cls_loss}')
+                # print(f'i={i}, loss={loss}, total_loss={total_loss}')
+
+                loss0.backward()
                 self.optimizer.step()
 
                 # print statistics
-                # running_loss += loss.item()  #Returns the value of this tensor as a standard Python number
-                # total_loss += loss.item()
+                running_loss += loss0.item()  #Returns the value of this tensor as a standard Python number
+                total_loss += loss0.item()
 
-                # if i % (int(len(self.dataloader['train'])/6)) == (int(len(self.dataloader['train'])/6)-1):  # print every 2000 mini-batches (mini-batch is the number of data points used to compute one Newton step)
-                #     print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / int(len(self.dataloader['train'])/6):.3f}')  # loss averaged over 2000 iterations
-                #     running_loss = 0.0
+                if i % (int(len(self.dataloader['train'])/6)) == (int(len(self.dataloader['train'])/6)-1):  # print every 2000 mini-batches (mini-batch is the number of data points used to compute one Newton step)
+                    print(f'[{epoch + 1}, {i + 1:5d}] loss: {running_loss / int(len(self.dataloader['train'])/6):.3f}')  # loss averaged over 2000 iterations
+                    running_loss = 0.0
+        
+                # torch.cuda.reset_peak_memory_stats(self.device)
+                # free, total = torch.cuda.mem_get_info(0)
+                # print(f"Model Usage = {torch.cuda.memory_allocated(self.device)/1024**3:2.2f} GB, Free Memory = {free/1024**3:2.2f} GB, Total Memory = {total/1024**3:2.2f} GB.")
+
+
+            torch.cuda.reset_peak_memory_stats(self.device)
+            free, total = torch.cuda.mem_get_info(0)
+            print(f"Model Usage = {torch.cuda.memory_allocated(self.device)/1024**3:2.2f} GB, Free Memory = {free/1024**3:2.2f} GB, Total Memory = {total/1024**3:2.2f} GB.")
 
             # self.accuracy['val'].append(self.compute_accuracy('val'))
             # self.accuracy['train'].append(self.compute_accuracy('train'))
@@ -161,8 +189,80 @@ if __name__ == '__main__':
             'val': data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES),
             'test': data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES)}
 
-    model = YOLO(in_channels = 3, num_classes = 20)
+#%%
+    model = YOLO(in_channels = 3, num_classes = 80)
+    yolov3_loss = YOLO_LOSSV3(ANCHOR_BOXES)
 
-    yolo = Trainer(data, model)
-    yolo.train()
+#%%
+    # yolo = Trainer(data, model, loss_func=YOLO_LOSSV3(ANCHOR_BOXES), device='cuda', batch_size=16, num_workers=4, epochs=1)
+    yolo = Trainer(data, model, loss_func=yolov3_loss, device='cuda', epochs=2, batch_size=16, lr=1.e-8, num_workers=8, shuffle=True)
+
+#%%
+    yolo()
+
+    #%%
+    # total_loss, box_loss, obj_loss, cls_loss = [[0.]*3 for _ in range(4)]
+    total_loss, box_loss, obj_loss, cls_loss = [torch.zeros(3) for _ in range(4)]
+    print(total_loss, box_loss)
+
+    #%%
+    bs = 4
+
+    dataloader = torch.utils.data.DataLoader(data['val'], batch_size = bs, shuffle = True)
+    train_features, train_labels = next(iter(dataloader))
+    print(f"Feature batch shape: {train_features.size()}")
+    print(f"Feature batch shape: {train_features[0].size()}")
+    # print(f"Feature batch shape: {train_features[0].squeeze().size()}")
+    print(f"Labels batch shape: {train_labels[0].size()}")
+    print(f"Labels batch output: {train_labels[0][0,:,:,:,:].size()}")
+    print(f"Labels batch output: {train_labels[1][0,:,:,:,:].size()}")
+    print(f"Labels batch output: {train_labels[2][0,:,:,:,:].size()}")
+    print(f"Labels batch output: {train_labels[2][0,0,0,0,:]}")
+    # print(f"Labels batch output: {train_labels[2][0][0][0][0]}")
+
+
+    img = train_features[0]
+    # img = train_features[0].squeeze()
+    print(img.size())
+    label = train_labels[0]
+    # plt.imshow(img, cmap="gray")
+    plt.imshow(img)
+    plt.show()
+
+    # img_cuda = img.reshape(bs,3,416,416).float()
+    # img_cuda.to('cuda')
+    # preds = model(img_cuda)
+    preds = model(train_features.view(bs,3,416,416).float())
+
+    # preds = model(img.reshape(bs,3,416,416).float())
+
+#%%
+    # img, labels = data['val'].__getitem__(160)
+    img, labels = data['val'].__getitem__(55, img_resize=False)
+
+    # print(img)
+    print(img.size())
+    # img2 = img.view(3, 375, 500)
+    # print(img2.size())
+    
+
+    # img2 = torch.tensor(img)
+    # print(img2)
+
+    img_resized, _, _ = data_COCO.letterbox(img.numpy(), target_size = [416, 416])
+    print(img_resized.size())
+
+    fig, ax = plt.subplots(1,2)
+    ax[0].imshow(img)
+    ax[1].imshow(img_resized)
+    preds0 = model(img_resized.view(1,3,416,416).float())
+    print(f'preds0.size() = {preds0[0].size() }')
+
+    # img.reshape(3,416,416)
+    # print(img.size())
+
+    # dummy = torch.rand(1, 3, 416, 416)
+    # preds = model(dummy)
+
+
 # %%
