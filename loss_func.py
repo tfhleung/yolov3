@@ -3,26 +3,32 @@ import torch
 import torch.nn as nn
 
 class YOLO_LOSSV3(nn.Module):
-    def __init__(self, anchor_boxes, scales = [13, 26, 52],
+    def __init__(self, anchor_boxes,
                   lambda_box = 10., lambda_cls = 1., lambda_obj = 1.,
-                  sigmoid = nn.Sigmoid(), box = nn.MSELoss(), obj = nn.BCEWithLogitsLoss(reduction='sum')):
+                  sigmoid = nn.Sigmoid()):
         super().__init__()
-        self.anchor_boxes = anchor_boxes
-        self.scales = scales
+        # self.anchor_boxes = anchor_boxes
+        # self.anchors = [scale.reshape(3,1,1,2) for scale in self.anchor_boxes]
+        # for i, scale in enumerate(anchor_boxes):
+        #     self.register_buffer(f'anchors_{i}', scale.reshape(3, 1, 1, 2))
+        # self.anchor_buffers = [getattr(self, f'anchors_{i}') for i in range(len(anchor_boxes))]
+
+        # anchors = [scale.reshape(3,1,1,2) for scale in anchor_boxes]
+        # anchors = torch.tensor(anchor_boxes)
+        # self.register_buffer(f'anchors', anchors)
+
+        self.register_buffer(f'anchor_boxes', anchor_boxes)
 
         self.lambda_box = lambda_box
         self.lambda_cls = lambda_cls
         self.lambda_obj = lambda_obj
 
         self.sigmoid = sigmoid
-        self.box = box
-        self.ce = nn.CrossEntropyLoss(reduction="sum")
-        self.obj = obj
-
         self.mse = nn.MSELoss(reduction='sum')
+        self.bce = nn.BCEWithLogitsLoss(reduction='sum')
+        self.ce = nn.CrossEntropyLoss(reduction="sum")
 
-
-    def forward(self, preds, target):
+    def forward(self, preds, target): # B, C, S, S, O
         anchors = [scale.reshape(3,1,1,2) for scale in self.anchor_boxes]
         total_loss, box_loss, obj_loss, cls_loss = [torch.zeros(3) for _ in range(4)]
 
@@ -31,44 +37,18 @@ class YOLO_LOSSV3(nn.Module):
             obj = target[i][..., 0] == 1
             noobj = target[i][..., 0] == 0
 
-            print(f'preds[i].size = {preds[i].size()}') # B, C, S, S, O
-            print(f'target[i].size = {target[i].size()}') # B, C, S, S, O
-            # print(f'preds[i][..., 5:][obj].size = {preds[i][..., 5:][obj].size()}')
-            # print(f'target[i][..., 5][obj].size = {target[i][..., 5][obj].size()}\n')
-            print(f'preds[i][..., 1:5][obj].size = {preds[i][..., 1:5][obj].size()}')
-            print(f'target[i][..., 1:5][obj].size = {target[i][..., 1:5][obj].size()}\n')
-
-            # print(f'preds[i][..., 1:5][obj].size = {preds[i][..., 1:5][obj]}')
-            # print(f'target[i][..., 1:5][obj].size = {target[i][..., 1:5][obj]}')
-
-
             #box loss
-            # preds[i][..., 1:3] = self.sigmoid(preds[i][..., 1:3]) # calcuate sigma(x) and sigma(y)
-            # target[i][..., 3:5] = torch.log(target[i][..., 3:5]/anchors[i] + 1.e-15) # calculate log(w) and log(h)
+            preds[i][..., 1:3] = self.sigmoid(preds[i][..., 1:3]) # calcuate sigma(x) and sigma(y)
+            target[i][..., 3:5] = torch.log(target[i][..., 3:5]/anchors[i] + 1.e-15) # calculate log(w) and log(h)
             box_loss[i] = self.mse(preds[i][..., 1:5][obj], target[i][..., 1:5][obj])
-            print(f'box_loss = {box_loss[i]}')
-
-            # predictions[..., 1:3] = self.sigmoid(predictions[..., 1:3])  # x,y coordinates
-            # target[..., 3:5] = torch.log(
-            #                 (1e-16 + target[..., 3:5] / anchors)
-            #             )  # width, height coordinates
-            # box_loss = self.mse(predictions[..., 1:5][obj], target[..., 1:5][obj])
 
             #object loss
             box_preds = torch.cat([self.sigmoid(preds[i][..., 1:3]), torch.exp(preds[i][..., 3:5]) * anchors[i]], dim=-1) #convert preds to ground-truth format (offsets)
-            # print(f'box_preds[i][obj].size() = {box_preds[obj].size()}')
-            # print(f'target[i][..., 1:5][obj] = {target[i][..., 1:5][obj]}')
-            # ious = self.iou(box_preds[obj], target[i][..., 1:5][obj]).detach()
-            # obj_loss[i] = self.obj(self.sigmoid(preds[i][..., 0][obj]), ious*target[i][..., 0][obj])
-            # obj_loss[i] = self.obj(self.sigmoid(preds[i][..., 0:1][obj]), ious*target[i][..., 0:1][obj])
-            # obj_loss[i] = bce(sigmoid(preds[i][..., 0][obj]), ious*target[i][..., 0][obj])
+            ious = self.iou(box_preds[obj], target[i][..., 1:5][obj]).detach()
+            obj_loss[i] = self.bce(self.sigmoid(preds[i][..., 0][obj]), ious*target[i][..., 0][obj])
 
             #class loss
             cls_loss[i] = self.ce(preds[i][..., 5:][obj], target[i][..., 5][obj].long())
-
-        # print(f'target[..., 5:][obj] = { target[..., 5:][obj]}')
-        # print(f'box_loss = {box_loss}')
-        # print(f'cls_loss = {cls_loss}')
 
             total_loss[i] = (
                 self.lambda_box*box_loss[i] + 
@@ -77,7 +57,6 @@ class YOLO_LOSSV3(nn.Module):
             )
 
         return total_loss, box_loss, obj_loss, cls_loss
-        # return total_loss
     
     def iou(self, bbox1, bbox2):
         w = (bbox1[..., 2]/2 + bbox2[..., 2]/2 - torch.abs(bbox1[..., 0] - bbox2[..., 0])).clamp(min=0)
@@ -117,21 +96,22 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from yolo import YOLO
     
+    # data = data_COCO(datadir = './coco/', datatype = 'train2017', anchors = ANCHOR_BOXES)
     data = data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES)
-    print(data.__getlen__())
+    print(data.__len__())
     model = YOLO(in_channels = 3, num_classes = 80)
 
     #%%
-    bs = 1000
+    bs = 4
     dataloader = torch.utils.data.DataLoader(data, batch_size = bs, shuffle = False)
     train_features, train_labels = next(iter(dataloader)) 
     # train_feature B, W, L, C, where B is batch_size, W is width, L is length is C is channels
     # train_labels S, B, A, I, J, O where S is the scale index, B is batch_size, A is anchor index, I is anchor index, J is anchor index and O is the label output
 
     #%%
-    fig, ax = plt.subplots(1,bs, figsize=(150,150))
-    for i in range(bs):
-        ax[i].imshow(train_features[i])
+    # fig, ax = plt.subplots(1,bs, figsize=(150,150))
+    # for i in range(bs):
+    #     ax[i].imshow(train_features[i])
     
     #%%
     print(f'images = {train_features.size()}')
@@ -143,7 +123,11 @@ if __name__ == '__main__':
     print(f'preds[0] = {preds[0].size()}')
     print(f'preds[1] = {preds[1].size()}\n')
 
-    loss_func(preds, train_labels)
+    loss, _, _, _ = loss_func(preds, train_labels)
+    total_loss = loss[0] + loss[1] + loss[2]
+    print(f'loss={loss}, total_loss={total_loss}')
+
+    
     # print(loss_func)
     # obj = train_labels[0][...,0] == 1
     # indices = torch.nonzero(obj)
