@@ -126,11 +126,10 @@ class data_COCO():
 
     def __getitem__(self, idx, img_resize = True):
         #need to map idx so that it is continous from 0 to 5000
-        print(f'idx = {idx}')
+        # print(f'idx = {idx}')
         img = self.coco.loadImgs(self.imgIds[idx])[0]
         annIds = self.coco.getAnnIds(imgIds=img['id'])
         anns = self.coco.loadAnns(annIds)
-        # output = [torch.zeros((self.num_anchors_per_scale, S, S, 6), dtype=torch.long) for S in self.scale_size]
         output = [torch.zeros((self.num_anchors_per_scale, S, S, 6)) for S in self.scale_size]
 
         if img_resize == True:
