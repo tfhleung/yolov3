@@ -8,9 +8,10 @@ import skimage.io as io
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-#%%
+#%% original coco class index
 # {1: 'person', 2: 'bicycle', 3: 'car', 4: 'motorcycle', 5: 'airplane', 6: 'bus', 7: 'train', 8: 'truck', 9: 'boat', 10: 'traffic light', 11: 'fire hydrant', 13: 'stop sign', 14: 'parking meter', 15: 'bench', 16: 'bird', 17: 'cat', 18: 'dog', 19: 'horse', 20: 'sheep', 21: 'cow', 22: 'elephant', 23: 'bear', 24: 'zebra', 25: 'giraffe', 27: 'backpack', 28: 'umbrella', 31: 'handbag', 32: 'tie', 33: 'suitcase', 34: 'frisbee', 35: 'skis', 36: 'snowboard', 37: 'sports ball', 38: 'kite', 39: 'baseball bat', 40: 'baseball glove', 41: 'skateboard', 42: 'surfboard', 43: 'tennis racket', 44: 'bottle', 46: 'wine glass', 47: 'cup', 48: 'fork', 49: 'knife', 50: 'spoon', 51: 'bowl', 52: 'banana', 53: 'apple', 54: 'sandwich', 55: 'orange', 56: 'broccoli', 57: 'carrot', 58: 'hot dog', 59: 'pizza', 60: 'donut', 61: 'cake', 62: 'chair', 63: 'couch', 64: 'potted plant', 65: 'bed', 67: 'dining table', 70: 'toilet', 72: 'tv', 73: 'laptop', 74: 'mouse', 75: 'remote', 76: 'keyboard', 77: 'cell phone', 78: 'microwave', 79: 'oven', 80: 'toaster', 81: 'sink', 82: 'refrigerator', 84: 'book', 85: 'clock', 86: 'vase', 87: 'scissors', 88: 'teddy bear', 89: 'hair drier', 90: 'toothbrush'}
-
+#remapped index 
+# remapped_labels={0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus', 6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light', 10: 'fire hydrant', 11: 'stop sign', 12: 'parking meter', 13: 'bench', 14: 'bird', 15: 'cat', 16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow', 20: 'elephant', 21: 'bear', 22: 'zebra', 23: 'giraffe', 24: 'backpack', 25: 'umbrella', 26: 'handbag', 27: 'tie', 28: 'suitcase', 29: 'frisbee', 30: 'skis', 31: 'snowboard', 32: 'sports ball', 33: 'kite', 34: 'baseball bat', 35: 'baseball glove', 36: 'skateboard', 37: 'surfboard', 38: 'tennis racket', 39: 'bottle', 40: 'wine glass', 41: 'cup', 42: 'fork', 43: 'knife', 44: 'spoon', 45: 'bowl', 46: 'banana', 47: 'apple', 48: 'sandwich', 49: 'orange', 50: 'broccoli', 51: 'carrot', 52: 'hot dog', 53: 'pizza', 54: 'donut', 55: 'cake', 56: 'chair', 57: 'couch', 58: 'potted plant', 59: 'bed', 60: 'dining table', 61: 'toilet', 62: 'tv', 63: 'laptop', 64: 'mouse', 65: 'remote', 66: 'keyboard', 67: 'cell phone', 68: 'microwave', 69: 'oven', 70: 'toaster', 71: 'sink', 72: 'refrigerator', 73: 'book', 74: 'clock', 75: 'vase', 76: 'scissors', 77: 'teddy bear', 78: 'hair drier', 79: 'toothbrush'}
 #%%
 # You can format your JSON document using Shift+Alt+F or Format Document from the context menu.
 #person_keypoints_val2017
@@ -33,7 +34,6 @@ class data_COCO():
         self.cats = self.coco.loadCats(self.coco.getCatIds())
         self.catIds = self.coco.getCatIds(self.cats)
         self.imgIds = self.coco.getImgIds(catIds = self.catIds)
-        self.labels = {cat['id'] : cat['name'] for cat in self.cats}
         self.target_size = target_size
 
         self.anchors = anchors
@@ -42,20 +42,32 @@ class data_COCO():
         self.iou_thresh = iou_thresh
 
         self.coco_to_yolo_dict = {cat['id']: i for i, cat in enumerate(self.cats)}
+        self.yolo_to_coco_dict = {i: cat['id'] for i, cat in enumerate(self.cats)}
+        self.coco_to_yolo_dict = {cat['id']: i for i, cat in enumerate(self.cats)}
+
+        self.cocolabels = {cat['id'] : cat['name'] for cat in self.cats}
+        self.yololabels = {i: self.cocolabels[self.yolo_to_coco_dict[i]] for i in range(len(self.cocolabels))}
+        self.num_classes = len(self.cocolabels)
 
     def __len__(self):
         return len(self.imgIds)
+    
+    def label(self, idx):
+        return self.yololabels[idx]
+    
+    def size(self, idx):
+        img = self.coco.loadImgs(self.imgIds[idx])[0]
+        return img['width'], img['height']
 
     def coco_to_yolo(self, anns, img):
-        # labels = torch.tensor([ann['category_id'] for ann in anns], dtype = torch.long)
         labels = torch.tensor([self.coco_to_yolo_dict[ann['category_id']] for ann in anns], dtype = torch.long)
         bbox = torch.tensor([ann['bbox'] for ann in anns], dtype = torch.float32)
 
         #some images may not have any annotations, check and discard
         if bbox.numel() == 0:
-            print(f'bbox.size() = {bbox.size()}')
-            print(f'labels.size() = {labels.size()}')
-            print('No annotations')
+            # print(f'bbox.size() = {bbox.size()}')
+            # print(f'labels.size() = {labels.size()}')
+            # print('No annotations')
             return None, None
 
         # coco bbox format is xmin, ymin, w, h, where the +x is to the right and +y is down
@@ -78,7 +90,58 @@ class data_COCO():
         bbox[:, [1,3]] *= img['height']
 
         return labels, bbox
+
+    # def convert_ij_to_xy(bbox, anchoridx_i, anchoridx_j, width, height, scale_size):
+    def convert_ij_to_xy(self, idx, input = None):
+        """
+        Convert the bbox in coco format (xmin, ymin, w, h) where x and y are the top left of the image
+        from the yolo labels of (xcell, ycell, tw, ty).
+
+        Parameters:
+            bboxes (list): list of lists containing all bboxes with each bboxes
+            specified as [class_pred, prob_score, x1, y1, x2, y2]
+            iou_threshold (float): threshold where predicted bboxes is correct
+            threshold (float): threshold to remove predicted bboxes (independent of IoU)
+            box_format (str): "midpoint" or "corners" used to specify bboxes
+
+        Returns:
+            list: list of bbox tensors for each scale
+        """
+        if input == None:
+            _, input = self.__getitem__(idx)
+
+        bbox = []
+        width, height = self.size(idx)
+
+        for scaleidx in range(len(input)):
+            obj = input[scaleidx][...,0] == 1
+            indices = obj.nonzero()
+
+            # bbox.append(np.zeros((indices.size(0),4)))
+            bbox.append(torch.zeros((indices.size(0),4)))
+            print(f'bbox[0].shape={bbox[0].shape}')
+
+            bbox[scaleidx][:,0] = (input[scaleidx][...,1][obj] + indices[:,1]) * width / self.scale_size[scaleidx]
+            bbox[scaleidx][:,1] = (input[scaleidx][...,2][obj] + indices[:,2]) * height / self.scale_size[scaleidx]
+            bbox[scaleidx][:,2] = input[scaleidx][...,3][obj] * width / self.scale_size[scaleidx]
+            bbox[scaleidx][:,3] = input[scaleidx][...,4][obj] * height / self.scale_size[scaleidx]
+
+        return bbox
     
+    def plot_bboxes(self, idx, input = None):
+        from matplotlib.patches import Rectangle
+        from matplotlib.collections import PatchCollection
+        if input == None:
+            img, input = self.__getitem__(idx)
+
+        bbox = self.convert_ij_to_xy(idx, input)
+        patch = [Rectangle((b[0]-0.5*b[2],b[1]-0.5*b[3]), b[2], b[3]) for b in bbox[0]] #yolo format is (xcenter, ycenter) but matplotlib is (xmin, ymin)
+        collection = PatchCollection(patch, linewidth=3, linestyle='--', edgecolor='b', facecolor='none')
+
+        fig, ax = plt.subplots(1, figsize=(30,30))
+        ax.add_collection(collection)
+        ax.imshow(img)
+
     @staticmethod
     def letterbox(img, target_size = [640,640]):
         #img format is h, w, c
@@ -94,7 +157,6 @@ class data_COCO():
         # print(f'int(scale*h)={int(scale*h)}, h={h}')
         # print(f'int(scale*w)={int(scale*w)}, w={w}')
         # print(f'c={img.shape[2]}, h={h}, w={w}')
-
 
         img_resized = cv2.resize(img, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_LINEAR)
         img_resized = cv2.copyMakeBorder(img_resized, top, bottom, left, right, cv2.BORDER_CONSTANT, None, value = 0)
@@ -183,8 +245,8 @@ class data_COCO():
                     output[scale_idx][anchor_idx, int(i), int(j), 0] = -1
  
         #image needs to be of type float32 and label needs to be torch long (the label is an index, not name)
-        return I.detach().clone(), tuple(output)
-        # return I, torch.tensor(output, dtype=torch.long)
+        return I.detach().clone(), tuple(output) # O is obj, x, y, w, h, class index
+
     
     # calculate iou between abox and bbox where iou is defined as: area of overlap / area of union
     # bbox format is x, y, w, h, where the +x is to the right and +y is down
@@ -233,12 +295,16 @@ class data_COCO():
         # print(area_intersect.size(), area_bbox.size(), area_anchor.size())
         return area_intersect/(area_bbox + area_anchor - area_intersect)
 
+
 #%%
     print(int(1.-1e-16))
 #%% test
 if __name__ == "__main__":
     data = data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES)
     print(data.__len__())
+
+#%%
+    data.plot_bboxes(23)
 
     #%%
     dataloader = torch.utils.data.DataLoader(data, batch_size = 1, shuffle = True)
@@ -260,6 +326,9 @@ if __name__ == "__main__":
     # plt.imshow(img, cmap="gray")
     plt.imshow(img)
     plt.show()
+
+    print(data.num_classes)
+    print(data.label(0))
 
     #%%
     print(dataloader.device)
@@ -288,29 +357,42 @@ if __name__ == "__main__":
 
 
     #%%
-    # img, output = data.__getitem__(16, img_resize=True) #w = 640, h = 480
-    img, output = data.__getitem__(22, img_resize=True) #height = 427, width = 640
-    # img, output = data.__getitem__(1680)
-    # img, output = data.__getitem__(160)
-    # img, output = data.__getitem__(54) #height = 427, width = 640
-    img, output = data.__getitem__(999) #height = 429, width = 500
-    # plt.imshow(img)
+    idx = 23
+    img, labels = data.__getitem__(idx)
+    width, height = data.size(idx)
+    print(f'width={width}, height={height}')
 
-    # print(f'img.size() = {img.size()}')
-
-
+    #idx = 16, 22, 1680, 160, 54, 999
+#%%
     # Create figure and axes
     fig, ax = plt.subplots(1, figsize=(30,30))
     ax.imshow(img)
     # trainerval.plot_imgs(8, font_size = 3, axis_size = 2, shuffle = True, dpi = 224*8)
 
-    print(output[0].size())
-    print(output[0].size()[1])
-    print(output[0].size()[2])
-    print(output[1].size())
-    print(output[2].size())
+    bbox = data.convert_ij_to_xy(labels, idx)
+    print(bbox[0])
+    print(bbox[1])
+    print(bbox[2])
 
-    #bounding boxes output is xmin, ymin, w, h - where x, y are the top left corner of the image (for the coco format)
+    from matplotlib.patches import Rectangle
+    from matplotlib.collections import PatchCollection
+
+    # patch = [Rectangle((b[0],b[1]), b[2], b[3]) for b in bbox[0]]
+    patch = [Rectangle((b[0]-0.5*b[2],b[1]-0.5*b[3]), b[2], b[3]) for b in bbox[0]]
+    collection = PatchCollection(patch, linewidth=3, linestyle='--', edgecolor='b', facecolor='none')
+    ax.add_collection(collection)
+
+
+    # rect = patches.Rectangle(xy=(bbox[0][:,0], bbox[0][:,1]), width=bbox[0][:,2], height=bbox[0][:,3], linewidth=3, linestyle='--', edgecolor='b', facecolor='none')
+    # ax.add_patch(rect)
+
+    # print(labels[0].size())
+    # print(labels[0].size()[1])
+    # print(labels[0].size()[2])
+    # print(labels[1].size())
+    # print(labels[2].size())
+
+    #bounding boxes labels is xmin, ymin, w, h - where x, y are the top left corner of the image (for the coco format)
     #YOLO format, x_center, y_center, w, h
     def convert_ij_to_xy(bbox, i, j, width, height, scale_size = 13):
         xmin = (bbox[0] + i) * width / scale_size
@@ -320,57 +402,66 @@ if __name__ == "__main__":
 
         return torch.tensor([xmin, ymin, w, h], dtype=torch.float32)
 
-    def plot_boxes(coord, fig_name):
+    def plot_boxes(coord, fig_name, linewidth=3, linestyle='--', edgecolor='r'):
         x = coord[0] - 0.5*coord[2]
         y = coord[1] - 0.5*coord[3]
 
-        rect = patches.Rectangle(xy = (x, y), width = coord[2], height = coord[3], linewidth=3, linestyle = '--', edgecolor='r', facecolor='none')
+        rect = patches.Rectangle(xy=(x, y), width=coord[2], height=coord[3], linewidth=linewidth, linestyle=linestyle, edgecolor=edgecolor, facecolor='none')
         fig_name.add_patch(rect)
 
-    # print(output[0][0])
-    def check_outputs(output):
-        print(f'size = {output.size()}')
+    def check_labels(labels):
+        print(f'size = {labels.size()}')
 
         count = 0 
-        for i in range(output.size()[1]):
-            for j in range(output.size()[2]):
-                for k in range(output.size()[0]):
-                    if output[k,i,j,0] == 1:
-                        # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 640, 480)
-                        # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 399, 640)
-                        bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 500, 429)
-                        # bbox0 = convert_ij_to_xy(output[k,i,j,1:5], i, j, 640, 427)
-                        print(f'i={i}, j={j}, anchor_idx={k}, bbox={output[k,i,j,1:5]}, bbox0={bbox0}')
-                        # print(f'i={i}, j={j}, anchor_idx={k}, label={data.labels[int(output[k,i,j,5])]}, bbox={output[k,i,j,1:5]}, bbox0={bbox0}')
+        for i in range(labels.size()[1]):
+            for j in range(labels.size()[2]):
+                for k in range(labels.size()[0]):
+                    if labels[k,i,j,0] == 1:
+                        bbox0 = convert_ij_to_xy(labels[k,i,j,1:5], i, j, width, height)
 
-                        plot_boxes(bbox0, ax)
+                        print(f'i={i}, j={j}, anchor_idx={k}, yololabels={labels[k,i,j,1:5]}, bbox0={bbox0}')
+                        # print(f'i={i}, j={j}, anchor_idx={k}, label={data.labels[int(labels[k,i,j,5])]}, bbox={labels[k,i,j,1:5]}, bbox0={bbox0}')
+
+                        plot_boxes(bbox0, ax, linestyle='dotted')
                         count += 1
 
         print(f'count = {count}')
 
-    check_outputs(output[0])
+    check_labels(labels[0])
     plt.show()
 
     #%%
     # obj = output[...,0] == 1
-    obj = output[0][...,0] == 1
-    noobj = output[0][...,0] == 0
+    obj = labels[0][...,0] == 1
+    # noobj = labels[0][...,0] == 0
     # print(obj)
 
-    print(obj.size())
-    print(output[0].size())
-    print(output[0][...,0].size())
-    print(output[0][...,0:1].size()) # we specify 0:1 instead of 0 in order to preserve the extra dimension (for broadcasting)
-    print(output[0][...,0:1][obj].size())
-    print(output[0][...,0:1][noobj].size())
+    # print(obj.size())
+    print(labels[0].size())
+    # print(labels[0][...,0].size())
+    # print(labels[0][...,0:1].size()) # we specify 0:1 instead of 0 in order to preserve the extra dimension (for broadcasting)
+    print(labels[0][...,0:1][obj].size())
+    # print(labels[0][obj])
+    print(obj.nonzero())
+    print(obj.nonzero().shape[0])
+
+    indices = obj.nonzero()
+    print(indices.shape)
+    print(indices[0,:])
+    print(indices[:,1])
+    # size = indices.size(0)
+    # print(size)
+
+    # print(labels[0][...,0:1][noobj].size())
 
     # print(output[0][...,0:1][obj])
     # print(output[0][...,0:1])
 
     #%%
-    print(ANCHOR_BOXES.size())
-    scale0 = ANCHOR_BOXES[0]
-    print(scale0.size())
+    import numpy as np
+
+    test = np.zeros((3,5,1))
+    print(test.shape)
 
 
 
