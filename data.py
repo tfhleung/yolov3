@@ -110,37 +110,41 @@ class data_COCO():
         if input == None:
             _, input = self.__getitem__(idx)
 
-        bbox = []
+        bbox, labels = [], []
         width, height = self.size(idx)
 
         for scaleidx in range(len(input)):
             obj = input[scaleidx][...,0] == 1
             indices = obj.nonzero()
-
-            # bbox.append(np.zeros((indices.size(0),4)))
-            bbox.append(torch.zeros((indices.size(0),4)))
-            print(f'bbox[0].shape={bbox[0].shape}')
+            bbox.append(torch.zeros((indices.size(0),5)))
+            # print(f'bbox[0].shape={bbox[0].shape}')
 
             bbox[scaleidx][:,0] = (input[scaleidx][...,1][obj] + indices[:,1]) * width / self.scale_size[scaleidx]
             bbox[scaleidx][:,1] = (input[scaleidx][...,2][obj] + indices[:,2]) * height / self.scale_size[scaleidx]
             bbox[scaleidx][:,2] = input[scaleidx][...,3][obj] * width / self.scale_size[scaleidx]
             bbox[scaleidx][:,3] = input[scaleidx][...,4][obj] * height / self.scale_size[scaleidx]
+            bbox[scaleidx][:,4] = input[scaleidx][...,5][obj] #label index
 
         return bbox
     
-    def plot_bboxes(self, idx, input = None):
+    def plot_bboxes(self, idx, labels = None):
         from matplotlib.patches import Rectangle
         from matplotlib.collections import PatchCollection
-        if input == None:
-            img, input = self.__getitem__(idx)
+        if labels == None:
+            img, labels = self.__getitem__(idx)
 
-        bbox = self.convert_ij_to_xy(idx, input)
+        bbox = self.convert_ij_to_xy(idx, labels)
         patch = [Rectangle((b[0]-0.5*b[2],b[1]-0.5*b[3]), b[2], b[3]) for b in bbox[0]] #yolo format is (xcenter, ycenter) but matplotlib is (xmin, ymin)
         collection = PatchCollection(patch, linewidth=3, linestyle='--', edgecolor='b', facecolor='none')
 
         fig, ax = plt.subplots(1, figsize=(30,30))
-        ax.add_collection(collection)
+        ax.add_collection(collection) #add all rectangles at once
+
+        for idx, b in enumerate(bbox[0]):
+            ax.text(b[0]-0.5*b[2], b[1]-0.5*b[3], self.label(int(b[4])), ha='center', va='center', fontsize=24, color='red')
+
         ax.imshow(img)
+        # plt.show()
 
     @staticmethod
     def letterbox(img, target_size = [640,640]):
@@ -304,7 +308,7 @@ if __name__ == "__main__":
     print(data.__len__())
 
 #%%
-    data.plot_bboxes(23)
+    data.plot_bboxes(15)
 
     #%%
     dataloader = torch.utils.data.DataLoader(data, batch_size = 1, shuffle = True)
@@ -361,6 +365,8 @@ if __name__ == "__main__":
     img, labels = data.__getitem__(idx)
     width, height = data.size(idx)
     print(f'width={width}, height={height}')
+
+    print(labels[0].size())
 
     #idx = 16, 22, 1680, 160, 54, 999
 #%%
@@ -436,19 +442,24 @@ if __name__ == "__main__":
     # noobj = labels[0][...,0] == 0
     # print(obj)
 
-    # print(obj.size())
+    test = torch.ones((3,13,13,6))
+    print(test.size())
+    obj0 = test[...,0] == 1
+
+    # print(obj.size())|
     print(labels[0].size())
     # print(labels[0][...,0].size())
     # print(labels[0][...,0:1].size()) # we specify 0:1 instead of 0 in order to preserve the extra dimension (for broadcasting)
     print(labels[0][...,0:1][obj].size())
+    print(labels[0][...,0:1][obj0].size())
     # print(labels[0][obj])
-    print(obj.nonzero())
-    print(obj.nonzero().shape[0])
+    # print(obj.nonzero())
+    # print(obj.nonzero().shape[0])
 
-    indices = obj.nonzero()
-    print(indices.shape)
-    print(indices[0,:])
-    print(indices[:,1])
+    # indices = obj.nonzero()
+    # print(indices.shape)
+    # print(indices[0,:])
+    # print(indices[:,1])
     # size = indices.size(0)
     # print(size)
 
