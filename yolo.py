@@ -1,6 +1,7 @@
 #%%
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 from collections import OrderedDict 
 
@@ -150,7 +151,7 @@ class YOLO(nn.Module):
         # self.output = nn.ModuleList([self.detector[0], self.detector[1], self.detector[2]])
         # self.output = []
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> tuple[Tensor]:
         xin = []
         x = self.darknet53(x)
 
@@ -200,6 +201,41 @@ if __name__ == '__main__':
     print(model(dummy)[1].shape)
     print(model(dummy)[2].shape)
 
+#%%
+    preds = model(dummy)
+    for pred in preds:
+        print(pred.shape)
+
+    def preds_to_bboxes(preds: tuple[Tensor]) -> list[Tensor]:
+        """
+        Calculates bbox based on YOLO model predictions.
+
+        Args: 
+            preds (tuple[tensor]): tuple of tensors for each scale with sizes ([1, 3, 13, 13, num_classes+5])
+                                                    ([1, 3, 26, 26, num_classes+5])
+                                                    ([1, 3, 52, 52, num_classes+5])
+        Return:
+            bbox (list): list of tensors corresponding to bounding boxes and class index (xmid, ymid, w, h, class_idx) for all scales
+        """
+        bbox = []
+        for scaleidx in range(len(preds)):
+            obj = preds[scaleidx][...,0] == 1
+            print(obj)
+            cell_indices = obj.nonzero()
+            bbox.append(torch.zeros((cell_indices.size(0),5)))
+
+            bbox[scaleidx][:,0] = torch.sigmoid(preds[scaleidx][...,1][obj]) + cell_indices[:,1]/13
+            bbox[scaleidx][:,1] = torch.sigmoid(preds[scaleidx][...,2][obj]) + cell_indices[:,2]/13
+            bbox[scaleidx][:,2] = 1./13 * torch.exp(preds[scaleidx][...,3][obj])
+            bbox[scaleidx][:,3] = 1./13 * torch.exp(preds[scaleidx][...,4][obj])
+            _, bbox[scaleidx][:,4] = torch.max(preds[scaleidx][...,5:][obj], dim=1)
+
+        return bbox
+
+#%%
+    bboxes = preds_to_bboxes(preds)
+    print(bboxes)
+
     # upsample = nn.Upsample(scale_factor=2)
     # print(upsample(model(dummy)).shape)
 # torch.Size([2, 3, 13, 13, 25])
@@ -215,16 +251,41 @@ if __name__ == '__main__':
     # print(model.darknet53.layer_cache[4].shape)
 
 #%%
-    dummy1 = torch.rand(1, 512, 26, 26)
-    dummy2 = torch.rand(1, 512, 26, 26)
+    from data import data_COCO
+    ANCHOR_BOXES = 0
+    data = data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES)
 
-    print(torch.cat([dummy1, dummy2], dim = 1).shape)
 
-    dummy3 = torch.rand(1, 512, 52, 52)
-    dummy4 = torch.rand(1, 256, 52, 52)
+    a = torch.tensor( [
+        [10, 10, 20, 20],
+        [12, 12, 22, 22],
+    ])
+    b = torch.tensor( [
+        [10, 10, 20, 20],
+        [12, 12, 22, 22],
+        [2, 15, 24, 22],
+        [5, 17, 26, 28],
+    ])
 
-    print(torch.cat([dummy3, dummy4], dim = 1).shape)
-    import matplotlib.pyplot as plt
+    print(a.shape)
+    print(b.shape)
+    # print(test(a,b))
+
+    print(data_COCO.compute_iou(a,b))
+
+    # if a[...,0] - b[...,0] > 1.e-6:
+    #     print('true')
+
+    # c = a[...,0] - b[...,0]
+    # print(c)
+
+#%%
+    import numpy as np
+    a = np.zeros( (10,4))
+    print(a[:,0].shape) # 1D array with ten elements
+    print(a[:,0:1].shape) #2D array of size (M, 1)
+    print(a[:,None,0].shape)
+
 
 
     #%%

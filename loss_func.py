@@ -1,6 +1,7 @@
 #%%
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 class YOLO_LOSSV3(nn.Module):
     def __init__(self, anchor_boxes,
@@ -29,32 +30,50 @@ class YOLO_LOSSV3(nn.Module):
         self.bce = nn.BCEWithLogitsLoss(reduction='sum')
         self.ce = nn.CrossEntropyLoss(reduction="sum")
 
-    # train_labels is S, B, A, I, J, O where S is the scale index, B is batch_size, A is anchor index, I is anchor position index, J is anchor position index and O is the label output
-    # O is obj, x, y, w, h, class index
-    def forward(self, preds, target): # B, C, S, S, O where B is batch size, C is the number of channels, S is the anchor box index and O is the output
+    def forward(self, preds: Tensor, labels: Tensor) -> tuple[Tensor]: # B, C, S, S, O where B is batch size, C is the number of channels, S is the anchor box index and O is the output
+        """
+        Compute the loss for the following:
+                                            (i) object confidence - scalar probability
+                                            (ii) no-object confidence - scalar probability
+                                            (iii) box loss - 
+                                            (vi) class confidence - vector of probability values corresponding to the class labels
+        
+        Args:
+            preds (tensor): preds is [S, BS, A, I, J, O], where O is the label output [obj, x, y, w, h, class probabilites for all classes]
+            labels (tensor): train_labels is [S, BS, A, I, J, O] where:
+                S is the scale index,
+                BS is batch_size,
+                A is anchor index (three sizes per scale),
+                I is anchor position index x-position,
+                J is anchor position index y-position,
+                O is the label output [obj, x, y, w, h, class index]
+        Returns:
+            loss (tuple[Tensor]):
+        """
+
         anchors = [scale.reshape(3,1,1,2) for scale in self.anchor_boxes]
         total_loss, box_loss, noobj_loss, obj_loss, cls_loss = [torch.zeros(3) for _ in range(5)]
 
         for i in range(len(preds)):
             #boolean masks
-            obj = target[i][..., 0] == 1
-            noobj = target[i][..., 0] == 0
+            obj = labels[i][..., 0] == 1
+            noobj = labels[i][..., 0] == 0
 
             #box loss
             preds[i][..., 1:3] = self.sigmoid(preds[i][..., 1:3]) # calcuate sigma(x) and sigma(y)
-            target[i][..., 3:5] = torch.log(target[i][..., 3:5]/anchors[i] + 1.e-15) # calculate log(w) and log(h)
-            box_loss[i] = self.mse(preds[i][..., 1:5][obj], target[i][..., 1:5][obj])
+            labels[i][..., 3:5] = torch.log(labels[i][..., 3:5]/anchors[i] + 1.e-15) # calculate log(w) and log(h)
+            box_loss[i] = self.mse(preds[i][..., 1:5][obj], labels[i][..., 1:5][obj])
 
             #no object loss
-            noobj_loss[i] = self.bce((preds[i][..., 0][noobj]), (target[i][..., 0][noobj]))
+            noobj_loss[i] = self.bce((preds[i][..., 0][noobj]), (labels[i][..., 0][noobj]))
 
             #object loss
             box_preds = torch.cat([self.sigmoid(preds[i][..., 1:3]), torch.exp(preds[i][..., 3:5]) * anchors[i]], dim=-1) #convert preds to ground-truth format (offsets)
-            ious = self.iou(box_preds[obj], target[i][..., 1:5][obj]).detach()
-            obj_loss[i] = self.bce(self.sigmoid(preds[i][..., 0][obj]), ious*target[i][..., 0][obj])
+            ious = self.iou(box_preds[obj], labels[i][..., 1:5][obj]).detach()
+            obj_loss[i] = self.bce(self.sigmoid(preds[i][..., 0][obj]), ious*labels[i][..., 0][obj])
 
             #class loss
-            cls_loss[i] = self.ce(preds[i][..., 5:][obj], target[i][..., 5][obj].long())
+            cls_loss[i] = self.ce(preds[i][..., 5:][obj], labels[i][..., 5][obj].long())
 
             total_loss[i] = (
                 self.lambda_box*box_loss[i] + 

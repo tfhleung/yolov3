@@ -1,6 +1,8 @@
 #%%
 import torch
 import torch.nn as nn
+from torch import device, dtype, Tensor
+
 import time
 from tqdm import tqdm
 
@@ -89,8 +91,8 @@ class Trainer():
 
             self.accuracy['val'].append(self.compute_class_accuracy('val'))
             self.accuracy['train'].append(self.compute_class_accuracy('train'))
-            self.accuracyperclass['train'].append(self.compute_perclass_accuracy('train'))
-            self.accuracyperclass['val'].append(self.compute_perclass_accuracy('val'))
+            # self.accuracyperclass['train'].append(self.compute_perclass_accuracy('train'))
+            # self.accuracyperclass['val'].append(self.compute_perclass_accuracy('val'))
             print(f'Epoch {epoch + 1}/{self.epochs} complete. train_accuracy = {self.accuracy['train'][-1][0]:2.3f}%, val_accuracy = {self.accuracy['val'][-1][0]:2.3f}%, train_loss = {self.accuracy['train'][-1][1]:.3f}, val_loss = {self.accuracy['val'][-1][1]:.3f}\n')
 
         print('Finished Training')
@@ -101,10 +103,10 @@ class Trainer():
     def __call__(self, *args, **kwds):
         self.train()
 
-    def compute_class_accuracy(self, set):
+    def compute_class_accuracy(self, set: str):
         correct, total = 0, 0
         totalrunningloss = 0.
-        model.train(False) #disables dropout layers and clears normalizing batch stats
+        self.model.train(False) #disables dropout layers and clears normalizing batch stats
 
         with torch.no_grad():
             for i, data in enumerate(tqdm(self.dataloader[set])):
@@ -126,10 +128,10 @@ class Trainer():
         print(f'Correct = {correct}, Total = {total}, Accuracy = {100. * correct/total:.3f}%')
         return (100. * correct / total), totalrunningloss / (i+1.)
     
-    def compute_perclass_accuracy(self, set):
+    def compute_perclass_accuracy(self, set: str) -> tuple[float]:
         correct, total = [torch.zeros(self.dataset['val'].num_classes) for _ in range(2)]
         totalrunningloss = 0.
-        model.train(False) #disables dropout layers and clears normalizing batch stats
+        self.model.train(False) #disables dropout layers and clears normalizing batch stats
 
         with torch.no_grad():
             for i, data in enumerate(tqdm(self.dataloader[set])):
@@ -139,6 +141,7 @@ class Trainer():
                 for scaleidx in range(len(output)):
                     obj = train_labels[scaleidx][..., 0] == 1
                     # preds is S, B, A, I, J, O where S is the scale index, B is batch_size, A is anchor index, I is anchor position index, J is anchor position index and O is the label output
+                    # O is obj, x, y, w, h, class index
 
                     max_val, max_idx = torch.max(output[scaleidx][...,5:][obj], dim=1)
 
@@ -157,9 +160,172 @@ class Trainer():
 
         return correct, total
 
-    def plot_bbox(self):
-        pass
+    def compute_mAP(self, bbox_preds, bbox_gt):
+        """
+        Calculates bbox based on YOLO model predictions.
+        precision = (true positive)/(true positive + false positive)
+        recall = (true positive)/(true positive + false negative)
+        
+        Args: 
+            bbox_preds (list[Tensor]): [img_idx, M, x, y, w, h, obj_confidence, class_idx]
+            bbox_gt (list[Tensor]): [img_idx, N, x, y, w, h, obj_confidence, class_idx]
+        Return:
+            bbox (list): list of tensors corresponding to bounding boxes and class index (xmid, ymid, w, h, class_idx)
+        """
 
+        mAP = 0.
+        return mAP
+    
+    def get_bboxes(self, dataloader) -> tuple[tuple[Tensor], Tensor]:
+        """
+        Get the bbox
+        
+        Args: 
+            dataloader (list[Tensor]): list of three tensors with sizes ([1, 3, 13, 13, num_classes+5])
+                                                    ([1, 3, 26, 26, num_classes+5])
+                                                    ([1, 3, 52, 52, num_classes+5])
+            preds (tensor): preds is [S, BS, A, I, J, O], where O is the label output [obj, x, y, w, h, class probabilites for all classes]
+            labels (tensor): train_labels is [S, BS, A, I, J, O] where:
+                S is the scale index,
+                BS is batch_size,
+                A is anchor index (three sizes per scale),
+                I is anchor position index x-position,
+                J is anchor position index y-position,
+                O is the label output [obj, x, y, w, h, class index]
+                                                    
+        Return:
+            bboxes (tuple[tuple[Tensor], Tensor]): tuple of tensors corresponding to bounding boxes and class index (xmid, ymid, w, h, class_idx)
+
+        """
+
+        bbox_preds, bbox_preds = [], []
+
+        self.model.train(False) #disables dropout layers and clears normalizing batch stats
+        with torch.no_grad():
+            for i, data in enumerate(tqdm(dataloader)):
+                imgs, train_labels = data[0].to(self.device), [d.to(self.device) for d in data[1]]
+                preds = self.model(imgs.view(imgs.size(0),3,416,416).float()) # [3][BS, ANCHOR_BOX, scale_idx, scale_idx, num_classes+5]
+
+                bbox_gt = self.dataset['val'].labels_to_bbox(train_labels) # [N][5]: xmid, ymid, w, h, class_index
+                bbox_preds = self.preds_to_bboxes(preds)# [3][M][5]: xmid, ymid, w, h, class_index
+
+                # for pred in preds:
+                for scaleidx in range(len(preds)):
+                    pass
+
+        return tuple(bbox_preds, bbox_gt)
+
+    def compute_mAPold(self, set: str):
+        """
+        Calculates bbox based on YOLO model predictions.
+        precision = (true positive)/(true positive + false positive)
+        recall = (true positive)/(true positive + false negative)
+        
+        Args: 
+            preds (tensor): preds is [S, BS, A, I, J, O], where O is the label output [obj, x, y, w, h, class probabilites for all classes]
+            preds (list[Tensor]): list of three tensors with sizes ([1, 3, 13, 13, num_classes+5])
+                                                    ([1, 3, 26, 26, num_classes+5])
+                                                    ([1, 3, 52, 52, num_classes+5])
+        Return:
+            bbox (list): list of tensors corresponding to bounding boxes and class index (xmid, ymid, w, h, class_idx)
+        """
+
+        self.model.train(False) #disables dropout layers and clears normalizing batch stats
+        with torch.no_grad():
+            precision, TP, FP = [torch.zeros(self.dataset['val'].num_classes) for _ in range(3)]
+
+            for i, data in enumerate(tqdm(self.dataloader[set])):
+                imgs, train_labels = data[0].to(self.device), [d.to(self.device) for d in data[1]]
+                preds = self.model(imgs.view(imgs.size(0),3,416,416).float()) # [3][BS, ANCHOR_BOX, scale_idx, scale_idx, num_classes+5]
+
+                bbox_gt = self.dataset['val'].labels_to_bbox(train_labels) # [N][5]: xmid, ymid, w, h, class_index
+                bbox_preds = self.preds_to_bboxes(preds)# [3][M][5]: xmid, ymid, w, h, class_index
+
+                # for pred in preds:
+                for scaleidx in range(len(preds)):
+
+                    #sort bbox_preds based on object confidence
+                    bbox_preds = bbox_preds[scaleidx][[...,0].argsort(descending=True)]
+
+                    #calculate the precision/recall for each class
+                    for cls in range(self.dataset['val'].num_classes):
+                        #filter bboxes based on class
+                        obj_pred = bbox_preds[scaleidx][...,4] == cls
+                        obj_gt = bbox_gt[...,4] == cls
+                        ious = data_COCO.compute_iou(bbox_preds[scaleidx][..., 0:4][obj_pred], bbox_gt[..., 0:4][obj_gt]) #[M,N], where each row corr
+
+                        gt_check = torch.zeros(len(bbox_gt[..., 0:4][obj_gt]), dtype=torch.bool)
+
+                        #loop though predicted bboxs
+                        for iou in ious:
+                            val, idx = iou.max(0)
+
+                            if val > self.dataset[set].iou_thresh and gt_check[idx] is False:
+                                TP[cls] += 1
+                                gt_check[idx] = True
+                            else:
+                                FP[cls] += 1
+
+            precision = TP/(TP + FP)
+            # recall = TP/(TP + FP)
+            return precision
+
+
+    def preds_to_bboxes(self, preds: tuple[Tensor]) -> list[Tensor]:
+        """
+        Calculates bbox based on YOLO model predictions.  The class index is determined based on the class with the highest confidence score.
+
+        Args: 
+            preds (tensor): preds is [S, BS, A, I, J, O], where O is the label output [obj, x, y, w, h, class probabilites for all classes]
+            preds (tuple[tensor]): tuple of tensors for each scale with sizes ([1, 3, 13, 13, num_classes+5])
+                                                    ([1, 3, 26, 26, num_classes+5])
+                                                    ([1, 3, 52, 52, num_classes+5])
+        Return:
+            bbox (list): list of tensors corresponding to bounding boxes and class index (xmid, ymid, w, h, obj_confidence, class_idx) for all scales
+        """
+        bbox = []
+        for scaleidx in range(len(preds)):
+            obj = preds[scaleidx][...,0] > self.dataset['val'].iou_thresh
+            cell_indices = obj.nonzero()
+            bbox.append(torch.zeros((cell_indices.size(0),6)))
+
+            bbox[scaleidx][:,0] = torch.sigmoid(preds[scaleidx][...,1][obj]) + cell_indices[:,1]/self.dataset['val'].scale_size[scaleidx]
+            bbox[scaleidx][:,1] = torch.sigmoid(preds[scaleidx][...,2][obj]) + cell_indices[:,2]/self.dataset['val'].scale_size[scaleidx]
+            bbox[scaleidx][:,2] = 1./self.dataset['val'].scale_size[scaleidx] * torch.exp(preds[scaleidx][...,3][obj])
+            bbox[scaleidx][:,3] = 1./self.dataset['val'].scale_size[scaleidx] * torch.exp(preds[scaleidx][...,4][obj])
+            bbox[scaleidx][:,4] = preds[scaleidx][...,0][obj]
+            _, bbox[scaleidx][:,5] = torch.max(preds[scaleidx][...,5:][obj], dim=1)
+            # max_val, max_idx = torch.max(preds[scaleidx][...,5:][obj], dim=1)
+
+        return bbox
+
+
+    def plot_bbox(self, input):
+        #resize image
+        self.model.train(False)
+        preds = self.model(input.view(1,3,416,416).float())
+
+        bbox = []
+        height, width, channels = img.shape
+
+        for scaleidx in range(3):
+            obj = preds[scaleidx][...,0] > self.dataset['train'].iou_thresh
+            indices = obj.nonzero()
+            bbox.append(torch.zeros((indices.size(0),4)))
+            # print(f'bbox[0].shape={bbox[0].shape}')
+
+            bbox[scaleidx][:,0] = (input[scaleidx][...,1][obj] + indices[:,1]) * width / self.scale_size[scaleidx]
+            bbox[scaleidx][:,1] = (input[scaleidx][...,2][obj] + indices[:,2]) * height / self.scale_size[scaleidx]
+            bbox[scaleidx][:,2] = input[scaleidx][...,3][obj] * width / self.scale_size[scaleidx]
+            bbox[scaleidx][:,3] = input[scaleidx][...,4][obj] * height / self.scale_size[scaleidx]
+
+        # bbox = self.convert_ij_to_xy(idx, input)
+        # patch = [Rectangle((b[0]-0.5*b[2],b[1]-0.5*b[3]), b[2], b[3]) for b in bbox[0]] #yolo format is (xcenter, ycenter) but matplotlib is (xmin, ymin)
+        # collection = PatchCollection(patch, linewidth=3, linestyle='--', edgecolor='b', facecolor='none')
+
+        # fig, ax = plt.subplots(1, figsize=(30,30))
+        # ax.add_collection(collection)
+        # ax.imshow(img)
 
     def plot_results(self):
         import numpy as np
@@ -212,6 +378,46 @@ class Trainer():
         plt.show()
 
 #%%
+# def output_to_bbox(preds, dataset):
+#     """
+#     Input: 
+#     preds: tensor of size ([1, 3, 52, 52, num_classes+5])
+#     torch.Size([1, 3, 13, 13, num_classes+5])
+#     torch.Size([1, 3, 26, 26, num_classes+5])
+#     torch.Size([1, 3, 52, 52, num_classes+5])
+
+#     """
+#     bbox = []
+#     for scaleidx in range(len(preds)):
+#         obj = preds[scaleidx][...,0] > dataset.iou_thresh
+#         cell_indices = obj.nonzero()
+#         bbox.append(torch.zeros((cell_indices.size(0),5)))
+#         # print(cell_indices)
+
+#         bbox[scaleidx][:,0] = torch.sigmoid(preds[scaleidx][...,1][obj]) + cell_indices[:,1]/dataset.scale_size[scaleidx]
+#         bbox[scaleidx][:,1] = torch.sigmoid(preds[scaleidx][...,2][obj]) + cell_indices[:,2]/dataset.scale_size[scaleidx]
+#         bbox[scaleidx][:,2] = 1./dataset.scale_size[scaleidx] * torch.exp(preds[scaleidx][...,3][obj])
+#         bbox[scaleidx][:,3] = 1./dataset.scale_size[scaleidx] * torch.exp(preds[scaleidx][...,4][obj])
+#         _, bbox[scaleidx][:,4] = torch.max(preds[scaleidx][...,5:][obj], dim=1)
+
+#     return bbox
+
+# ANCHOR_BOXES = torch.tensor([
+# [(0.28, 0.22), (0.38, 0.48), (0.9, 0.78)],
+# [(0.07, 0.15), (0.15, 0.11), (0.14, 0.29)],
+# [(0.02, 0.03), (0.04, 0.07), (0.08, 0.06)],
+# ])
+    
+# dataset = data_COCO(datadir = './coco/', datatype = 'val2017', anchors = ANCHOR_BOXES)
+# dummy_pred = torch.rand([1, 3, 13, 13, 25])
+# # torch.Size([1, 3, 26, 26, 25])
+# # torch.Size([1, 3, 52, 52, 25])
+
+# bbox = output_to_bbox(dummy_pred, dataset)
+# print(bbox)
+
+
+#%%
 if __name__ == '__main__':
     ANCHOR_BOXES = torch.tensor([
     [(0.28, 0.22), (0.38, 0.48), (0.9, 0.78)],
@@ -229,88 +435,96 @@ if __name__ == '__main__':
 
 #%%
     # yolo = Trainer(data, model, loss_func=YOLO_LOSSV3(ANCHOR_BOXES), device='cuda', batch_size=16, num_workers=4, epochs=1)
-    yolo = Trainer(data, model, loss_func=yolov3_loss, device='cuda', epochs=2, batch_size=16, lr=1.e-8, num_workers=8, shuffle=True)
+    yolo = Trainer(data, model, loss_func=yolov3_loss, device='cuda', epochs=1, batch_size=16, lr=1.e-8, num_workers=8, shuffle=True)
 
 #%%
-    correct, total = yolo.compute_perclass_accuracy('val')
+    # correct, total = yolo.compute_perclass_accuracy('val')
 
 #%%
     yolo()
 
-#%%
-    def compute_class_accuracy(model, loss_func, dataset, set, batch_size = 8, num_workers = 4, device = 'cuda'):
-        correct, total = 0, 0
-        totalrunningloss = 0.
-        model.train(False) #disables dropout layers and clears normalizing batch stats
-
-        dataloader = {'train': torch.utils.data.DataLoader(dataset['train'], batch_size, shuffle = True, num_workers = num_workers),
-                        'val': torch.utils.data.DataLoader(dataset['val'], batch_size, shuffle = False, num_workers = num_workers),
-                        'test': torch.utils.data.DataLoader(dataset['test'], batch_size, shuffle = False, num_workers = num_workers)}
-
-        with torch.no_grad():
-            for i, data in enumerate(tqdm(dataloader[set])):
-                imgs, train_labels = data[0].to(device), [d.to(device) for d in data[1]]
-                output = model(imgs.view(batch_size,3,416,416).float())
-        
-                for scaleidx in range(len(output)):
-                    obj = train_labels[scaleidx][..., 0] == 1
-                    # preds is S, B, A, I, J, O where S is the scale index, B is batch_size, A is anchor index, I is anchor position index, J is anchor position index and O is the label output
-
-                    max_val, max_idx = torch.max(output[scaleidx][...,5:][obj], dim=1)
-                    correct += ( max_idx == train_labels[scaleidx][...,5][obj] ).sum().item()
-                    total += int(train_labels[scaleidx][...,5][obj][0])
-
-                loss, _, _, _ = loss_func(output, train_labels)
-                totalrunningloss += sum(loss).item()  # Returns the value of this tensor as a standard Python number
-
-        print(f'Dataset: {set}, Num of Images = {total}, Num of Iterations = {i+1}')
-        print(f'Correct = {correct}, Total = {total}, Accuracy = {100. * correct/total:.3f}%')
-        return (100. * correct / total), totalrunningloss / (i+1.)
-    
-    def compute_perclass_accuracy(model, loss_func, dataset, set, batch_size = 8, num_workers = 4, device = 'cuda'):
-        correct, total = [torch.zeros(data.num_classes) for _ in range(2)]
-        totalrunningloss = 0.
-        model.train(False) #disables dropout layers and clears normalizing batch stats
-
-        dataloader = {'train': torch.utils.data.DataLoader(dataset['train'], batch_size, shuffle = True, num_workers = num_workers),
-                        'val': torch.utils.data.DataLoader(dataset['val'], batch_size, shuffle = False, num_workers = num_workers),
-                        'test': torch.utils.data.DataLoader(dataset['test'], batch_size, shuffle = False, num_workers = num_workers)}
-
-        with torch.no_grad():
-            for i, data in enumerate(tqdm(dataloader[set])):
-                imgs, train_labels = data[0].to(device), [d.to(device) for d in data[1]]
-                output = model(imgs.view(batch_size,3,416,416).float())
-        
-                for scaleidx in range(len(output)):
-                    obj = train_labels[scaleidx][..., 0] == 1
-                    # preds is S, B, A, I, J, O where S is the scale index, B is batch_size, A is anchor index, I is anchor position index, J is anchor position index and O is the label output
-
-                    max_val, max_idx = torch.max(output[scaleidx][...,5:][obj], dim=1)
-
-                    for i in range(data.num_classes):
-                        clsmax_idx = train_labels[scaleidx][...,5][obj] == cls
-                        correct[cls] += ( max_idx[clsmax_idx] == train_labels[scaleidx][...,5][obj][clsmax_idx] ).sum().item()
-                        total[cls] += len(train_labels[scaleidx][...,5][obj][clsmax_idx])
-
-                loss, _, _, _ = loss_func(output, train_labels)
-                totalrunningloss += sum(loss).item()  # Returns the value of this tensor as a standard Python number
-
-        print(f'Dataset: {set}, Num of Images = {total}, Num of Iterations = {i+1}')
-
-        for cls in range(80):
-            print(f'Class={cls}, Correct = {correct[cls]}, Total = {total[cls]}, Accuracy = {100. * correct[cls]/total[cls]:.3f}%')
-
-        return correct, total
-
-#%%
-    # compute_class_accuracy(model, yolov3_loss, data, 'val', batch_size = 8, num_workers = 4, device = 'cuda')
-    compute_perclass_accuracy(model, yolov3_loss, data, 'val', batch_size = 8, num_workers = 4, device = 'cuda')
-
-#%%
-    correct, total = [torch.zeros(80) for _ in range(2)]
-    print(correct.size())
-
     #%%
+    yolo.compute_mAP(set='val')
+
+#%%
+    dataloader = {'train': torch.utils.data.DataLoader(data['train'], batch_size=16, shuffle = True, num_workers = 8),
+                        'val': torch.utils.data.DataLoader(data['val'], batch_size=16, shuffle = False, num_workers = 8),
+                        'test': torch.utils.data.DataLoader(data['test'], batch_size=16, shuffle = False, num_workers = 8)}
+
+
+    def 
+
+    def compute_mAP(set: str):
+        """
+        Calculates bbox based on YOLO model predictions.
+        # precision = (true positive)/(true positive + false positive)
+        # recall = (true positive)/(true positive + false negative)
+        
+        Args: 
+            preds (list): list of three tensors with sizes ([1, 3, 13, 13, num_classes+5])
+                                                    ([1, 3, 26, 26, num_classes+5])
+                                                    ([1, 3, 52, 52, num_classes+5])
+        Return:
+            bbox (list): list of tensors corresponding to bounding boxes and class index (xmid, ymid, w, h, class_idx)
+        """
+
+        model.train(False) #disables dropout layers and clears normalizing batch stats
+        with torch.no_grad():
+            precision, TP, FP = [torch.zeros(data[set].num_classes) for _ in range(3)]
+            print('test')
+
+            for i, d in enumerate(tqdm(dataloader['val'])):
+                imgs, train_labels = d[0].to('cuda'), [d.to('cuda') for d in d[1]]
+                preds = model(imgs.view(imgs.size(0),3,416,416).float()) # [3][BS, ANCHOR_BOX, scale_idx, scale_idx, num_classes+5]
+
+                bbox_gt = data['val'].labels_to_bbox(train_labels) # [BS][N][O], O = [xmid, ymid, w, h, class_index]
+                bbox_preds = yolo.preds_to_bboxes(preds)# [BS][3][M][O]: O = [xmid, ymid, w, h, class_index]
+
+                # for pred in preds:
+                for scaleidx in range(len(preds)):
+                    # print(f'bbox_preds[scaleidx].shape={bbox_preds[scaleidx].shape}')
+                    #sort bbox_preds based on object confidence
+                    bbox_preds[scaleidx] = bbox_preds[scaleidx][bbox_preds[scaleidx][...,0].argsort(descending=True)]
+
+                    #calculate the precision/recall for each class
+                    for cls in range(data['val'].num_classes):
+                        #filter bboxes based on class
+                        obj_pred = bbox_preds[scaleidx][...,4] == cls
+                        obj_gt = bbox_gt[...,4] == cls
+                        ious = data_COCO.compute_iou(bbox_preds[scaleidx][..., 0:4][obj_pred], bbox_gt[..., 0:4][obj_gt]) #[M,N], where each row corr
+
+                        gt_check = torch.zeros(len(bbox_gt[..., 0:4][obj_gt]), dtype=torch.bool)
+
+                        #loop though predicted bboxs
+                        for iou in ious:
+                            val, idx = iou.max(0)
+
+                            if val > data['val'].iou_thresh and gt_check[idx] is False:
+                                TP[cls] += 1
+                                gt_check[idx] = True
+                            else:
+                                FP[cls] += 1
+
+            precision = TP/(TP + FP)
+            return precision
+#%%
+    data['val'].iou_thresh = -1.e-6
+    print(compute_mAP(set='val'))
+
+#%%
+    bs = 1
+    dataloader = torch.utils.data.DataLoader(data['val'], batch_size = bs, shuffle = True)
+    train_features, train_labels = next(iter(dataloader))
+    preds = model(train_features.view(bs,3,416,416).float().to('cuda'))
+
+
+    bbox_gt = data['val'].labels_to_bbox(train_labels) # [N][5]: xmid, ymid, w, h, class_index
+    bbox_preds = yolo.preds_to_bboxes(preds)# [3][M][5]: xmid, ymid, w, h, class_index
+
+    print(bbox_preds[0])
+    bbox_preds[0] = bbox_preds[0][bbox_preds[0][...,0].argsort(descending=True)]
+
+#%%
     bs = 1
 
     dataloader = torch.utils.data.DataLoader(data['val'], batch_size = bs, shuffle = True)
@@ -378,6 +592,8 @@ if __name__ == '__main__':
         total = len(train_labels[scaleidx][...,5][obj[scaleidx]][clsmax_idx])
         print(f'class={cls}, correct={correct_class}, total={total}')
 
+    print(f'obj.shape={obj[0].shape}')
+
     # output = model(train_features.view(bs,3,416,416).float())
 
     # preds = model(img.reshape(bs,3,416,416).float())
@@ -385,6 +601,9 @@ if __name__ == '__main__':
 #%%
     # img, labels = data['val'].__getitem__(160)
     img, labels = data['val'].__getitem__(55, img_resize=False)
+
+    yolo.plot_bbox(img)
+
 
     # print(img)
     print(img.size())
